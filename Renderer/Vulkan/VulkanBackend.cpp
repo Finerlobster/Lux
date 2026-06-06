@@ -1,0 +1,1294 @@
+
+#include "VulkanBackend.h"
+#include "Core/Vertex.h"
+#include "Core/Assert.h"
+
+#include <cstdio>
+#include <cstring>
+
+namespace LX {
+    #if defined(LX_DEBUG)
+        static VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(
+            VkDebugUtilsMessageSeverityFlagBitsEXT          severity,
+            VkDebugUtilsMessageTypeFlagsEXT                 type,
+            const VkDebugUtilsMessengerCallbackDataEXT*     pCallbackData,
+            void*                                           pUserData
+        )
+        {
+            (void)type;
+            (void)pUserData;
+        
+            if(severity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT){
+                ::fprintf(stderr, "[Vulkan Validation] %s\n", pCallbackData->pMessage);
+            }
+            return VK_FALSE;
+        }
+
+    #endif
+
+    static bool LoadShaderModule(VkDevice device, const char* path, VkShaderModule* outModule)
+    {
+        FILE* file = nullptr;
+        
+        #if defined(_MSC_VER)
+            fopen_s(&file, path, "rb");
+        #else
+            file = ::fopen(path, "rb");
+        #endif 
+
+        fopen_s(&file, path, "rb");
+        if(!file)
+        {
+            ::fprintf(stderr, "[Lux] Failed to open shader: %s\n", path);
+            return false;
+        }
+
+        ::fseek(file, 0, SEEK_END);
+        usize fileSize = (usize)::ftell(file);
+        ::fseek(file, 0, SEEK_SET);
+
+        // SPIR-V must be read into a uint32_t aligned buffer
+        // We allocate fileSize bytes but treat it as an array of u32
+        u8* buffer = new u8[fileSize];
+        ::fread(buffer, 1, fileSize, file);
+        ::fclose(file);
+
+        VkShaderModuleCreateInfo createInfo{};
+        createInfo.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        createInfo.codeSize = fileSize;
+        createInfo.pCode    = reinterpret_cast<const u32*>(buffer);
+
+        VkResult result = vkCreateShaderModule(device, &createInfo, nullptr, outModule);
+
+        delete[] buffer;
+
+        if (result != VK_SUCCESS)
+        {
+            ::fprintf(stderr, "[Lux] Failed to create shader module: %s\n", path);
+            return false;
+        }
+
+        return true;
+    }
+
+    bool VulkanBackend::Init(const WindowHandle& window)
+    {
+        VkResult result = volkInitialize();
+        LX_ASSERT(result == VK_SUCCESS, "Failed to initialize Volk");
+
+        if(!InitInstance()) return false;
+        if(!InitSurface(window)) return false;
+        if(!SelectPhysicalDevice()) return false;
+        if(!InitDevice()) return false;
+        if(!InitAllocator()) return false;
+        if(!InitSwapchain()) return false;
+        if(!InitRenderPass()) return false;
+        if(!InitDescriptors()) return false;
+        if(!InitFramebuffers()) return false;
+        if(!InitCommands()) return false;
+        if(!InitSyncObjects()) return false;
+        if(!InitUniformBuffers()) return false;
+        if(!InitPipeline()) return false;
+
+        ::printf("Vulkan initialized successfully\n");
+        return true;
+    }
+
+    bool VulkanBackend::InitInstance()
+    {
+        VkApplicationInfo appInfo{};
+        appInfo.sType                   = VK_STRUCTURE_TYPE_APPLICATION_INFO;
+        appInfo.pApplicationName        = "Lux Sandbox";
+        appInfo.applicationVersion      = VK_MAKE_VERSION(0, 1, 0);
+        appInfo.pEngineName             = "Lux";
+        appInfo.engineVersion           = VK_MAKE_VERSION(0, 1, 0);
+        appInfo.apiVersion              = VK_API_VERSION_1_3;
+
+        const char* extensions[] = {
+            VK_KHR_SURFACE_EXTENSION_NAME,
+            VK_KHR_WIN32_SURFACE_EXTENSION_NAME,
+            #if defined(LX_DEBUG)
+                VK_EXT_DEBUG_UTILS_EXTENSION_NAME
+            #endif
+        };
+
+        u32 extensionCount = sizeof(extensions) / sizeof(extensions[0]);
+
+        VkInstanceCreateInfo createInfo{};
+        createInfo.sType                    = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+        createInfo.pApplicationInfo         = &appInfo;
+        createInfo.enabledExtensionCount    = extensionCount;
+        createInfo.ppEnabledExtensionNames  = extensions;
+        createInfo.enabledLayerCount        = 0;
+        createInfo.ppEnabledLayerNames      = nullptr;
+
+        #if defined(LX_DEBUG)
+            const char* validationLayer = "VK_LAYER_KHRONOS_validation";
+
+            u32 layerCount = 0;
+            vkEnumerateInstanceLayerProperties(&layerCount, nullptr);
+        
+            VkLayerProperties availableLayers[64];
+            vkEnumerateInstanceLayerProperties(&layerCount, availableLayers);
+        
+            bool validationAvailable = false;
+            for (u32 i = 0; i < layerCount; i++)
+            {
+                if(::strcmp(availableLayers[i].layerName, validationLayer) == 0)
+                {
+                    validationAvailable = true;
+                    break;
+                }
+            }
+            
+            if(validationAvailable){
+                createInfo.enabledLayerCount = 1;
+                createInfo.ppEnabledLayerNames = &validationLayer;
+                ::printf("[Lux] Validation layers enabled\n");
+            }
+            else
+            {
+                ::printf("[Lux] Warning: Validation layers not available\n");
+            }
+        #endif
+
+        VkResult result = vkCreateInstance(&createInfo, nullptr, &m_Instance);
+        LX_ASSERT(result == VK_SUCCESS, "Failed to create VkInstance");
+        
+        volkLoadInstance(m_Instance);
+
+        #if defined(LX_DEBUG)
+            if(validationAvailable)
+            {
+                VkDebugUtilsMessengerCreateInfoEXT messengerInfo{};
+                messengerInfo.sType             = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
+                messengerInfo.messageSeverity   =
+                    VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
+                    VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+                messengerInfo.messageType       =
+                    VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
+                    VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
+                    VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+                messengerInfo.pfnUserCallback   = DebugCallback;
+
+                result = vkCreateDebugUtilsMessengerEXT(
+                    m_Instance, &messengerInfo, nullptr, &m_DebugMessenger
+                );
+
+                LX_ASSERT(result == VK_SUCCESS, "Failed to create debug messenger");
+
+            }
+        #endif
+            
+        ::printf("[Lux] Vulkan instance created\n");
+        return true;
+    }
+
+    void VulkanBackend::Shutdown()
+    {
+        if(m_Device != VK_NULL_HANDLE)
+        {
+            // Wait for the GPU to finish all work before destroying anything
+            vkDeviceWaitIdle(m_Device);
+
+            //Destroy all active buffers
+            for (u32 i = 0; i < MAX_BUFFERS; i++)
+            {
+                if (m_Buffers[i].inUse)
+                {
+                    vmaDestroyBuffer(
+                        m_Allocator, m_Buffers[i].buffer, m_Buffers[i].allocation);
+                    m_Buffers[i] = Buffer{};
+                }
+            }
+            ::printf("[Lux] Buffer pool cleared\n");
+
+            //Destroy uniform buffers
+            for (u32 i = 0; i < m_SwapchainImageCount; i++)
+            {
+                if (m_UniformBuffers[i] != VK_NULL_HANDLE)
+                {
+                    vmaDestroyBuffer(
+                        m_Allocator, m_UniformBuffers[i], m_UniformAllocations[i]);
+                    m_UniformBuffers[i]     = VK_NULL_HANDLE;
+                    m_UniformAllocations[i] = VK_NULL_HANDLE;
+                }
+            }
+            ::printf("[Lux] Uniform buffers destroyed\n");
+
+            //Destroy descriptor pool
+            //Destroying the pool implicitly frees all descriptor sets
+            if (m_DescriptorPool != VK_NULL_HANDLE)
+            {
+                vkDestroyDescriptorPool(m_Device, m_DescriptorPool, nullptr);
+                m_DescriptorPool = VK_NULL_HANDLE;
+                ::printf("[Lux] Descriptor pool destroyed\n");
+            }
+
+            // Destroy descriptor set layout
+            if (m_DescriptorSetLayout != VK_NULL_HANDLE)
+            {
+                vkDestroyDescriptorSetLayout(m_Device, m_DescriptorSetLayout, nullptr);
+                m_DescriptorSetLayout = VK_NULL_HANDLE;
+                ::printf("[Lux] Descriptor set layout destroyed\n");
+            }
+
+            // Destroy allocator
+            if (m_Allocator != VK_NULL_HANDLE)
+            {
+                vmaDestroyAllocator(m_Allocator);
+                m_Allocator = VK_NULL_HANDLE;
+                ::printf("[Lux] VMA allocator destroyed\n");
+            }
+
+            //Destroy Synchronization objects
+            for (u32 i = 0; i < m_SwapchainImageCount; i++)
+            {
+                if (m_ImageAvailableSemaphores[i] != VK_NULL_HANDLE)
+                {
+                    vkDestroySemaphore(
+                        m_Device, m_ImageAvailableSemaphores[i], nullptr);
+                    m_ImageAvailableSemaphores[i] = VK_NULL_HANDLE;
+                }
+
+                if (m_RenderFinishedSemaphores[i] != VK_NULL_HANDLE)
+                {
+                    vkDestroySemaphore(
+                        m_Device, m_RenderFinishedSemaphores[i], nullptr);
+                    m_RenderFinishedSemaphores[i] = VK_NULL_HANDLE;
+                }
+
+                if (m_InFlightFences[i] != VK_NULL_HANDLE)
+                {
+                    vkDestroyFence(m_Device, m_InFlightFences[i], nullptr);
+                    m_InFlightFences[i] = VK_NULL_HANDLE;
+                }
+            }
+            ::printf("[Lux] Sync objects destroyed\n");
+
+            //Destroy Command pool
+            if (m_CommandPool != VK_NULL_HANDLE)
+            {
+                vkDestroyCommandPool(m_Device, m_CommandPool, nullptr);
+                m_CommandPool = VK_NULL_HANDLE;
+                ::printf("[Lux] Command pool destroyed\n");
+            }
+
+            //Destroy Framebuffers
+            for(u32 i = 0; i < m_SwapchainImageCount; i++)
+            {
+                if(m_Framebuffers[i] != VK_NULL_HANDLE)
+                {
+                    vkDestroyFramebuffer(m_Device, m_Framebuffers[i], nullptr);
+                    m_Framebuffers[i] = VK_NULL_HANDLE;
+                }
+            }
+            ::printf("[Lux] Framebuffers destroyed\n");
+
+            //Destroy Pipeline
+            if (m_Pipeline != VK_NULL_HANDLE)
+            {
+                vkDestroyPipeline(m_Device, m_Pipeline, nullptr);
+                m_Pipeline = VK_NULL_HANDLE;
+                ::printf("[Lux] Pipeline destroyed\n");
+            }
+
+            //Destroy Pipeline layout
+            if (m_PipelineLayout != VK_NULL_HANDLE)
+            {
+                vkDestroyPipelineLayout(m_Device, m_PipelineLayout, nullptr);
+                m_PipelineLayout = VK_NULL_HANDLE;
+                ::printf("[Lux] Pipeline layout destroyed\n");
+            }
+
+            //Destroy RenderPass
+            if(m_RenderPass != VK_NULL_HANDLE)
+            {
+                vkDestroyRenderPass(m_Device, m_RenderPass, nullptr);
+                m_RenderPass = VK_NULL_HANDLE;
+                ::printf("[Lux] RenderPass destroyed\n");
+            }
+
+            //Destroy ImageViews
+            for(u32 i = 0; i < m_SwapchainImageCount; i++)
+            {
+                if(m_SwapchainImageViews[i] != VK_NULL_HANDLE)
+                {
+                    vkDestroyImageView(m_Device, m_SwapchainImageViews[i], nullptr);
+                    m_SwapchainImageViews[i] = VK_NULL_HANDLE;
+                }
+            }
+
+            //Destroy Swapchain
+            if(m_Swapchain != VK_NULL_HANDLE)
+            {
+                vkDestroySwapchainKHR(m_Device, m_Swapchain, nullptr);
+                m_Swapchain = VK_NULL_HANDLE;
+                ::printf("[Lux] Swapchain destroyed\n");
+            }
+
+            vkDestroyDevice(m_Device, nullptr);
+            m_Device = VK_NULL_HANDLE;
+            ::printf("[Lux] Logical device destroyed\n");
+        }
+
+        if(m_Surface != VK_NULL_HANDLE){
+            vkDestroySurfaceKHR(m_Instance, m_Surface, nullptr);
+            m_Surface = VK_NULL_HANDLE;
+            ::printf("[Lux] Surface destroyed\n");
+        }
+
+        if(m_Instance != VK_NULL_HANDLE)
+        {
+        #if defined(LX_DEBUG)
+            if(m_DebugMessenger != VK_NULL_HANDLE){
+                vkDestroyDebugUtilsMessengerEXT(m_Instance, m_DebugMessenger, nullptr);
+                m_DebugMessenger = VK_NULL_HANDLE;
+            }
+        #endif
+            vkDestroyInstance(m_Instance, nullptr);
+            m_Instance = VK_NULL_HANDLE;
+            ::printf("[Lux] Vulkan instance destroyed\n");
+        }
+    }
+
+    bool VulkanBackend::InitSurface(const WindowHandle& window)
+    {
+        #if defined(_WIN32)
+            VkWin32SurfaceCreateInfoKHR createInfo{};
+            createInfo.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
+            createInfo.hwnd = static_cast<HWND>(window.hwnd);
+            createInfo.hinstance = static_cast<HINSTANCE>(window.hinstance);
+
+            VkResult result = vkCreateWin32SurfaceKHR(m_Instance, &createInfo, nullptr, &m_Surface);
+
+            LX_ASSERT(result == VK_SUCCESS, "Failed to create Win32 surface");
+            if(result != VK_SUCCESS)
+                return false;
+
+            ::printf("Vulkan surface created successfully\n");
+            return true;
+        #endif
+
+        #if defined(__linux__)
+            return false;
+        #endif
+    }
+    
+    bool VulkanBackend::SelectPhysicalDevice()
+    {
+        u32 deviceCount = 0;
+        vkEnumeratePhysicalDevices(m_Instance, &deviceCount, nullptr);
+        LX_ASSERT(deviceCount > 0, "No Vulkan capable GPU found");
+        if(deviceCount == 0)
+            return false;
+
+        VkPhysicalDevice devices[8];
+        vkEnumeratePhysicalDevices(m_Instance, &deviceCount, devices);
+
+        VkPhysicalDevice bestDevice = VK_NULL_HANDLE;
+        u32 bestScore = 0;
+        u32 bestFamily = UINT32_MAX;
+        
+        for(u32 i = 0; i < deviceCount; i++)
+        {
+            VkPhysicalDevice device = devices[i];
+            VkPhysicalDeviceProperties properties{};
+            vkGetPhysicalDeviceProperties(device, &properties);
+
+            //Disqualify GPUs that don't support Vulkan 1.3
+            if(VK_API_VERSION_MAJOR(properties.apiVersion) < 1 || VK_API_VERSION_MINOR(properties.apiVersion) < 3)
+            {
+                ::printf("[Lux] Skipping %s - Does not support Vulkan 1.3\n", properties.deviceName);
+                continue;
+            }
+
+            u32 familyCount = 0;
+            vkGetPhysicalDeviceQueueFamilyProperties(device, &familyCount, nullptr);
+
+            VkQueueFamilyProperties families[32];
+            vkGetPhysicalDeviceQueueFamilyProperties(device, &familyCount, families);
+
+            u32 graphicsFamily = UINT32_MAX;
+            for(u32 f = 0; f < familyCount; f++)
+            {
+                if (!(families[f].queueFlags & VK_QUEUE_GRAPHICS_BIT))
+                    continue;
+
+                VkBool32 presentSupport = VK_FALSE;
+                vkGetPhysicalDeviceSurfaceSupportKHR(
+                    device, f, m_Surface, &presentSupport);
+
+                if (presentSupport == VK_TRUE)
+                {
+                    graphicsFamily = f;
+                    break;
+                }
+            } 
+            if (graphicsFamily == UINT32_MAX)
+            {
+                ::printf("[Lux] Skipping %s — no graphics queue family\n", properties.deviceName);
+                continue;
+            }
+
+            u32 score = 0;
+            if(properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU)
+                score += 1000; //prefer dedicated GPUs
+            else if(properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU)
+                score += 100;
+
+            if(score > bestScore)
+            {
+                bestDevice = device;
+                bestFamily = graphicsFamily;
+                bestScore = score;
+            }
+        }
+
+        if(bestDevice == VK_NULL_HANDLE)
+        {
+            ::printf("[Lux] No suitable GPU found\n");
+            return false;
+        }
+
+        m_PhysicalDevice = bestDevice;
+        m_GraphicsQueueFamily = bestFamily;
+
+        // Print picked GPU
+        VkPhysicalDeviceProperties chosen{};
+        vkGetPhysicalDeviceProperties(m_PhysicalDevice, &chosen);
+        ::printf("[Lux] Selected GPU: %s\n", chosen.deviceName);
+        ::printf("[Lux] Graphics queue family: %u\n", m_GraphicsQueueFamily);
+
+        return true;
+    }
+
+    bool VulkanBackend::InitDevice()
+    {
+        //One graphics queue at full priority
+        f32 queuePriority = 1.0f;
+
+        VkDeviceQueueCreateInfo queueInfo{};
+        queueInfo.sType                 = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+        queueInfo.queueFamilyIndex      = m_GraphicsQueueFamily;
+        queueInfo.queueCount            = 1;
+        queueInfo.pQueuePriorities      = &queuePriority;
+
+        const char* deviceExtensions[] =
+        {
+            VK_KHR_SWAPCHAIN_EXTENSION_NAME
+        };
+
+        VkPhysicalDeviceFeatures features{};
+
+        VkDeviceCreateInfo createInfo{};
+        createInfo.sType                   = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+        createInfo.queueCreateInfoCount    = 1;
+        createInfo.pQueueCreateInfos       = &queueInfo;
+        createInfo.enabledExtensionCount   = 1;
+        createInfo.ppEnabledExtensionNames = deviceExtensions;
+        createInfo.pEnabledFeatures        = &features;
+
+        VkResult result = vkCreateDevice(m_PhysicalDevice, &createInfo, nullptr, &m_Device);
+        LX_ASSERT(result == VK_SUCCESS, "Failed to create logical device");
+
+        volkLoadDevice(m_Device);
+
+        vkGetDeviceQueue(m_Device, m_GraphicsQueueFamily, 0, &m_GraphicsQueue);
+
+        ::printf("[Lux] Logical device created\n");
+        ::printf("[Lux] Graphics queue retrieved\n");
+        return true;
+    }
+
+    bool VulkanBackend::InitSwapchain()
+    {
+        VkSurfaceCapabilitiesKHR capabilities{};
+        vkGetPhysicalDeviceSurfaceCapabilitiesKHR(m_PhysicalDevice, m_Surface, &capabilities);
+
+        u32 formatCount = 0;
+        vkGetPhysicalDeviceSurfaceFormatsKHR(m_PhysicalDevice, m_Surface, &formatCount, nullptr);
+
+        VkSurfaceFormatKHR formats[32];
+        vkGetPhysicalDeviceSurfaceFormatsKHR(m_PhysicalDevice, m_Surface, &formatCount, formats);
+
+        VkSurfaceFormatKHR chosenFormat = formats[0];
+        for (u32 i = 0; i < formatCount; i++)
+        {
+            if (formats[i].format     == VK_FORMAT_B8G8R8A8_SRGB &&
+                formats[i].colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
+            {
+                chosenFormat = formats[i];
+                break;
+            }
+        }
+
+        u32 presentModeCount = 0;
+        vkGetPhysicalDeviceSurfacePresentModesKHR(m_PhysicalDevice, m_Surface, &presentModeCount, nullptr);
+
+        VkPresentModeKHR presentModes[8];
+        vkGetPhysicalDeviceSurfacePresentModesKHR(m_PhysicalDevice, m_Surface, &presentModeCount, presentModes);
+    
+        VkPresentModeKHR chosenPresentMode = VK_PRESENT_MODE_FIFO_KHR;
+        for (u32 i = 0; i < presentModeCount; i++)
+        {
+            if (presentModes[i] == VK_PRESENT_MODE_MAILBOX_KHR)
+            {
+                chosenPresentMode = VK_PRESENT_MODE_MAILBOX_KHR;
+                break;
+            }
+        }
+
+        VkExtent2D extent;
+
+        if (capabilities.currentExtent.width != UINT32_MAX)
+        {
+            extent = capabilities.currentExtent;
+        }
+        else
+        {
+            extent.width  = 1280;
+            extent.height = 720;
+
+            if (extent.width < capabilities.minImageExtent.width)
+                extent.width = capabilities.minImageExtent.width;
+            if (extent.width > capabilities.maxImageExtent.width)
+                extent.width = capabilities.maxImageExtent.width;
+            if (extent.height < capabilities.minImageExtent.height)
+                extent.height = capabilities.minImageExtent.height;
+            if (extent.height > capabilities.maxImageExtent.height)
+                extent.height = capabilities.maxImageExtent.height;
+        }
+
+        //Triple buffering
+        u32 imageCount = 3;
+
+        if (imageCount < capabilities.minImageCount)
+            imageCount = capabilities.minImageCount;
+
+        if (capabilities.maxImageCount > 0 &&
+            imageCount > capabilities.maxImageCount)
+            imageCount = capabilities.maxImageCount;
+
+        VkSwapchainCreateInfoKHR createInfo{};
+        createInfo.sType            = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
+        createInfo.surface          = m_Surface;
+        createInfo.minImageCount    = imageCount;
+        createInfo.imageFormat      = chosenFormat.format;
+        createInfo.imageColorSpace  = chosenFormat.colorSpace;
+        createInfo.imageExtent      = extent;
+        createInfo.imageArrayLayers = 1;  // always 1 unless stereoscopic 3D
+        createInfo.imageUsage       = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+        createInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        createInfo.preTransform     = capabilities.currentTransform;
+        createInfo.compositeAlpha   = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+        createInfo.presentMode      = chosenPresentMode;
+        createInfo.clipped          = VK_TRUE;
+        createInfo.oldSwapchain     = VK_NULL_HANDLE;
+
+        VkResult result = vkCreateSwapchainKHR(
+            m_Device, &createInfo, nullptr, &m_Swapchain);
+        LX_ASSERT(result == VK_SUCCESS, "Failed to create swapchain");
+        if (result != VK_SUCCESS)
+            return false;
+
+        
+        vkGetSwapchainImagesKHR(m_Device, m_Swapchain, &m_SwapchainImageCount, nullptr);
+        vkGetSwapchainImagesKHR(m_Device, m_Swapchain, &m_SwapchainImageCount, m_SwapchainImages);
+
+        m_SwapchainFormat = chosenFormat.format;
+        m_SwapchainExtent = extent;
+
+        for (u32 i = 0; i < m_SwapchainImageCount; i++)
+        {
+            VkImageViewCreateInfo viewInfo{};
+            viewInfo.sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+            viewInfo.image    = m_SwapchainImages[i];
+            viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            viewInfo.format   = m_SwapchainFormat;
+
+            viewInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
+            viewInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
+            viewInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
+            viewInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
+
+            viewInfo.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+            viewInfo.subresourceRange.baseMipLevel   = 0;
+            viewInfo.subresourceRange.levelCount     = 1;
+            viewInfo.subresourceRange.baseArrayLayer = 0;
+            viewInfo.subresourceRange.layerCount     = 1;
+
+            result = vkCreateImageView(
+                m_Device, &viewInfo, nullptr, &m_SwapchainImageViews[i]);
+            LX_ASSERT(result == VK_SUCCESS, "Failed to create swapchain image view");
+            if (result != VK_SUCCESS)
+                return false;
+        }
+
+        ::printf("[Lux] Swapchain created (%ux%u, %u images)\n",
+            extent.width, extent.height, m_SwapchainImageCount);
+
+        return true;
+    }
+
+    bool VulkanBackend::InitRenderPass()
+    {
+        VkAttachmentDescription colorAttachment{};
+        colorAttachment.format         = m_SwapchainFormat;
+        colorAttachment.samples        = VK_SAMPLE_COUNT_1_BIT; // no multisampling yet
+        colorAttachment.loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        colorAttachment.storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
+        colorAttachment.stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        colorAttachment.initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
+        colorAttachment.finalLayout    = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+        VkAttachmentReference colorAttachmentRef{};
+        colorAttachmentRef.attachment = 0; // index into the attachments array
+        colorAttachmentRef.layout     = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+        VkSubpassDescription subpass{};
+        subpass.pipelineBindPoint       = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        subpass.colorAttachmentCount    = 1;
+        subpass.pColorAttachments       = &colorAttachmentRef;
+
+        VkSubpassDependency dependency{};
+        dependency.srcSubpass    = VK_SUBPASS_EXTERNAL;
+        dependency.dstSubpass    = 0;
+        dependency.srcStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dependency.srcAccessMask = 0;
+        dependency.dstStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+        VkRenderPassCreateInfo createInfo{};
+        createInfo.sType           = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+        createInfo.attachmentCount = 1;
+        createInfo.pAttachments    = &colorAttachment;
+        createInfo.subpassCount    = 1;
+        createInfo.pSubpasses      = &subpass;
+        createInfo.dependencyCount = 1;
+        createInfo.pDependencies   = &dependency;
+
+        VkResult result = vkCreateRenderPass(m_Device, &createInfo, nullptr, &m_RenderPass);
+
+        LX_ASSERT(result == VK_SUCCESS, "Failed to create render pass");
+        if (result != VK_SUCCESS)
+            return false;
+
+        ::printf("[Lux] Render pass created\n");
+        return true;
+    }
+
+    bool VulkanBackend::InitFramebuffers()
+    {
+        for(u32 i = 0; i < m_SwapchainImageCount; i++)
+        {
+            VkImageView attachments[] = { m_SwapchainImageViews[i]} ;
+
+            VkFramebufferCreateInfo createInfo{};
+            createInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+            createInfo.renderPass = m_RenderPass;
+            createInfo.attachmentCount = 1;
+            createInfo.pAttachments = attachments;
+            createInfo.width = m_SwapchainExtent.width;
+            createInfo.height = m_SwapchainExtent.height;
+            createInfo.layers = 1;
+
+            VkResult result = vkCreateFramebuffer(m_Device, &createInfo, nullptr, &m_Framebuffers[i]);
+
+            LX_ASSERT(result == VK_SUCCESS, "Failed to create framebuffer");
+            if(result != VK_SUCCESS) return false;    
+        }
+        
+        ::printf("[Lux] Framebuffers created (%u)\n", m_SwapchainImageCount);
+        return true;
+    }
+
+    bool VulkanBackend::InitCommands()
+    {
+        VkCommandPoolCreateInfo poolInfo{};
+        poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+        poolInfo.queueFamilyIndex = m_GraphicsQueueFamily;
+        poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+
+        VkResult result = vkCreateCommandPool(
+        m_Device, &poolInfo, nullptr, &m_CommandPool);
+
+        LX_ASSERT(result == VK_SUCCESS, "Failed to create command pool");
+        if (result != VK_SUCCESS)
+            return false;
+
+        VkCommandBufferAllocateInfo allocInfo{};
+        allocInfo.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        allocInfo.commandPool        = m_CommandPool;
+        allocInfo.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        allocInfo.commandBufferCount = m_SwapchainImageCount;
+
+        result = vkAllocateCommandBuffers(
+            m_Device, &allocInfo, m_CommandBuffers);
+
+        LX_ASSERT(result == VK_SUCCESS, "Failed to allocate command buffers");
+        if (result != VK_SUCCESS)
+            return false;
+
+        ::printf("[Lux] Command pool and buffers created\n");
+        return true;
+    }
+
+    bool VulkanBackend::InitSyncObjects()
+    {
+        VkSemaphoreCreateInfo semaphoreInfo{};
+        semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+
+        VkFenceCreateInfo fenceInfo{};
+        fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+
+        for (u32 i = 0; i < m_SwapchainImageCount; i++)
+        {
+            VkResult result;
+
+            result = vkCreateSemaphore(
+                m_Device, &semaphoreInfo, nullptr, &m_ImageAvailableSemaphores[i]);
+            LX_ASSERT(result == VK_SUCCESS, "Failed to create image available semaphore");
+            if (result != VK_SUCCESS) return false;
+
+            result = vkCreateSemaphore(
+                m_Device, &semaphoreInfo, nullptr, &m_RenderFinishedSemaphores[i]);
+            LX_ASSERT(result == VK_SUCCESS, "Failed to create render finished semaphore");
+            if (result != VK_SUCCESS) return false;
+
+            result = vkCreateFence(
+                m_Device, &fenceInfo, nullptr, &m_InFlightFences[i]);
+            LX_ASSERT(result == VK_SUCCESS, "Failed to create in flight fence");
+            if (result != VK_SUCCESS) return false;
+        }
+
+        ::printf("[Lux] Sync objects created\n");
+        return true;
+    }
+
+    bool VulkanBackend::InitPipeline()
+    {
+        VkShaderModule vertModule = VK_NULL_HANDLE;
+        VkShaderModule fragModule = VK_NULL_HANDLE;
+
+        if (!LoadShaderModule(m_Device, "Shaders/triangle.vert.spv", &vertModule))
+            return false;
+
+        if (!LoadShaderModule(m_Device, "Shaders/triangle.frag.spv", &fragModule))
+            return false;
+
+        VkPipelineShaderStageCreateInfo vertStage{};
+        vertStage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        vertStage.stage  = VK_SHADER_STAGE_VERTEX_BIT;
+        vertStage.module = vertModule;
+        vertStage.pName  = "main"; // entry point function name in the shader
+
+        VkPipelineShaderStageCreateInfo fragStage{};
+        fragStage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        fragStage.stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+        fragStage.module = fragModule;
+        fragStage.pName  = "main";
+
+        VkPipelineShaderStageCreateInfo shaderStages[] = { vertStage, fragStage };
+
+        VkVertexInputBindingDescription bindingDescription = Vertex::GetBindingDescription();
+        VkVertexInputAttributeDescription attributeDescriptions[2];
+        u32 attributeCount = 0;
+        Vertex::GetAttributeDescriptions(attributeDescriptions, &attributeCount);
+
+        VkPipelineVertexInputStateCreateInfo vertexInput{};
+        vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+        vertexInput.vertexBindingDescriptionCount   = 1;
+        vertexInput.pVertexBindingDescriptions = &bindingDescription;
+        vertexInput.vertexAttributeDescriptionCount = attributeCount;
+        vertexInput.pVertexAttributeDescriptions = attributeDescriptions;
+
+        VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
+        inputAssembly.sType    = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+        inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+        inputAssembly.primitiveRestartEnable = VK_FALSE;
+
+        VkViewport viewport{};
+        viewport.x        = 0.0f;
+        viewport.y        = 0.0f;
+        viewport.width    = (f32)m_SwapchainExtent.width;
+        viewport.height   = (f32)m_SwapchainExtent.height;
+        viewport.minDepth = 0.0f;
+        viewport.maxDepth = 1.0f;
+
+        VkRect2D scissor{};
+        scissor.offset = {0, 0};
+        scissor.extent = m_SwapchainExtent;
+
+        VkPipelineViewportStateCreateInfo viewportState{};
+        viewportState.sType         = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+        viewportState.viewportCount = 1;
+        viewportState.pViewports    = &viewport;
+        viewportState.scissorCount  = 1;
+        viewportState.pScissors     = &scissor;
+
+        //Rasterizer
+        VkPipelineRasterizationStateCreateInfo rasterizer{};
+        rasterizer.sType            = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+        rasterizer.depthClampEnable = VK_FALSE;
+        rasterizer.polygonMode      = VK_POLYGON_MODE_FILL;
+        rasterizer.cullMode         = VK_CULL_MODE_NONE;
+        rasterizer.frontFace        = VK_FRONT_FACE_CLOCKWISE;
+        rasterizer.lineWidth        = 1.0f;
+
+        VkPipelineMultisampleStateCreateInfo multisampling{};
+        multisampling.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+        multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+        multisampling.sampleShadingEnable  = VK_FALSE;
+
+        //Color Blending
+        VkPipelineColorBlendAttachmentState colorBlendAttachment{};
+        colorBlendAttachment.colorWriteMask =
+            VK_COLOR_COMPONENT_R_BIT |
+            VK_COLOR_COMPONENT_G_BIT |
+            VK_COLOR_COMPONENT_B_BIT |
+            VK_COLOR_COMPONENT_A_BIT;
+        colorBlendAttachment.blendEnable = VK_FALSE;
+
+        VkPipelineColorBlendStateCreateInfo colorBlending{};
+        colorBlending.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+        colorBlending.logicOpEnable   = VK_FALSE;
+        colorBlending.attachmentCount = 1;
+        colorBlending.pAttachments    = &colorBlendAttachment;
+
+        VkPipelineLayoutCreateInfo layoutInfo{};
+        layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        layoutInfo.setLayoutCount         = 1;
+        layoutInfo.pSetLayouts            = &m_DescriptorSetLayout;
+        layoutInfo.pushConstantRangeCount = 0;
+
+        VkResult result = vkCreatePipelineLayout(m_Device, &layoutInfo, nullptr, &m_PipelineLayout);
+        LX_ASSERT(result == VK_SUCCESS, "Failed to create pipeline layout");
+        if (result != VK_SUCCESS)
+            return false;
+
+        VkGraphicsPipelineCreateInfo pipelineInfo{};
+        pipelineInfo.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+        pipelineInfo.stageCount          = 2;
+        pipelineInfo.pStages             = shaderStages;
+        pipelineInfo.pVertexInputState   = &vertexInput;
+        pipelineInfo.pInputAssemblyState = &inputAssembly;
+        pipelineInfo.pViewportState      = &viewportState;
+        pipelineInfo.pRasterizationState = &rasterizer;
+        pipelineInfo.pMultisampleState   = &multisampling;
+        pipelineInfo.pDepthStencilState  = nullptr; // no depth buffer yet
+        pipelineInfo.pColorBlendState    = &colorBlending;
+        pipelineInfo.pDynamicState       = nullptr;
+        pipelineInfo.layout              = m_PipelineLayout;
+        pipelineInfo.renderPass          = m_RenderPass;
+        pipelineInfo.subpass             = 0;
+
+        result = vkCreateGraphicsPipelines(m_Device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &m_Pipeline);
+        LX_ASSERT(result == VK_SUCCESS, "Failed to create graphics pipeline");
+        if (result != VK_SUCCESS)
+            return false;
+
+        vkDestroyShaderModule(m_Device, vertModule, nullptr);
+        vkDestroyShaderModule(m_Device, fragModule, nullptr);
+
+        ::printf("[Lux] Pipeline created\n");
+        return true;
+    }
+
+    bool VulkanBackend::InitAllocator()
+    {
+        VmaVulkanFunctions vulkanFunctions{};
+        vulkanFunctions.vkGetInstanceProcAddr = vkGetInstanceProcAddr;
+        vulkanFunctions.vkGetDeviceProcAddr = vkGetDeviceProcAddr;
+
+        VmaAllocatorCreateInfo allocatorInfo{};
+        allocatorInfo.instance         = m_Instance;
+        allocatorInfo.physicalDevice   = m_PhysicalDevice;
+        allocatorInfo.device           = m_Device;
+        allocatorInfo.vulkanApiVersion = VK_API_VERSION_1_3;
+        allocatorInfo.pVulkanFunctions = &vulkanFunctions;
+
+        VkResult result = vmaCreateAllocator(&allocatorInfo, &m_Allocator);
+        LX_ASSERT(result == VK_SUCCESS, "Failed to create VMA allocator");
+        if (result != VK_SUCCESS)
+            return false;
+
+        ::printf("[Lux] VMA allocator created\n");
+        return true;
+    }
+
+    bool VulkanBackend::InitUniformBuffers()
+    {
+        VkDeviceSize bufferSize = sizeof(GlobalUBO);
+
+        for (u32 i = 0; i < m_SwapchainImageCount; i++)
+        {
+            VkBufferCreateInfo bufferInfo{};
+            bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+            bufferInfo.size  = bufferSize;
+            bufferInfo.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+
+            VmaAllocationCreateInfo allocInfo{};
+            allocInfo.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
+            allocInfo.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
+
+            VmaAllocationInfo allocationInfo{};
+
+            VkResult result = vmaCreateBuffer(
+                m_Allocator,
+                &bufferInfo, &allocInfo,
+                &m_UniformBuffers[i], &m_UniformAllocations[i],
+                &allocationInfo);
+
+            LX_ASSERT(result == VK_SUCCESS, "Failed to create uniform buffer");
+            if (result != VK_SUCCESS)
+                return false;
+
+            // Keep a persistent mapped pointer — uniform buffers are
+            // written every frame so we never unmap them
+            m_UniformMapped[i] = allocationInfo.pMappedData;
+        }
+
+        //Wire each descriptor set to its uniform buffer
+        for (u32 i = 0; i < m_SwapchainImageCount; i++)
+        {
+            VkDescriptorBufferInfo bufferInfo{};
+            bufferInfo.buffer = m_UniformBuffers[i];
+            bufferInfo.offset = 0;
+            bufferInfo.range  = sizeof(GlobalUBO);
+
+            VkWriteDescriptorSet write{};
+            write.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            write.dstSet          = m_DescriptorSets[i];
+            write.dstBinding      = 0;
+            write.dstArrayElement = 0;
+            write.descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            write.descriptorCount = 1;
+            write.pBufferInfo     = &bufferInfo;
+
+            vkUpdateDescriptorSets(m_Device, 1, &write, 0, nullptr);
+        }
+
+        ::printf("[Lux] Uniform buffers created\n");
+        return true;
+    }
+
+    bool VulkanBackend::InitDescriptors()
+    {
+        //Descriptor Set Layout
+        //Tells Vulkan what resources the shaders expect
+        VkDescriptorSetLayoutBinding uboBinding{};
+        uboBinding.binding            = 0;
+        uboBinding.descriptorType     = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        uboBinding.descriptorCount    = 1;
+        uboBinding.stageFlags         = VK_SHADER_STAGE_VERTEX_BIT;
+        uboBinding.pImmutableSamplers = nullptr;
+
+        VkDescriptorSetLayoutCreateInfo layoutInfo{};
+        layoutInfo.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        layoutInfo.bindingCount = 1;
+        layoutInfo.pBindings    = &uboBinding;
+
+        VkResult result = vkCreateDescriptorSetLayout(
+            m_Device, &layoutInfo, nullptr, &m_DescriptorSetLayout);
+        LX_ASSERT(result == VK_SUCCESS, "Failed to create descriptor set layout");
+        if (result != VK_SUCCESS)
+            return false;
+
+        //Descriptor Pool
+        //Pre-allocates memory for descriptor sets
+        VkDescriptorPoolSize poolSize{};
+        poolSize.type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        poolSize.descriptorCount = MAX_SWAPCHAIN_IMAGES;
+
+        VkDescriptorPoolCreateInfo poolInfo{};
+        poolInfo.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        poolInfo.maxSets       = MAX_SWAPCHAIN_IMAGES;
+        poolInfo.poolSizeCount = 1;
+        poolInfo.pPoolSizes    = &poolSize;
+
+        result = vkCreateDescriptorPool(
+            m_Device, &poolInfo, nullptr, &m_DescriptorPool);
+        LX_ASSERT(result == VK_SUCCESS, "Failed to create descriptor pool");
+        if (result != VK_SUCCESS)
+            return false;
+
+        //Descriptor Sets
+        //Allocate one descriptor set per frame in flight
+        VkDescriptorSetLayout layouts[MAX_SWAPCHAIN_IMAGES];
+        for (u32 i = 0; i < m_SwapchainImageCount; i++)
+            layouts[i] = m_DescriptorSetLayout;
+
+        VkDescriptorSetAllocateInfo allocInfo{};
+        allocInfo.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        allocInfo.descriptorPool     = m_DescriptorPool;
+        allocInfo.descriptorSetCount = m_SwapchainImageCount;
+        allocInfo.pSetLayouts        = layouts;
+
+        result = vkAllocateDescriptorSets(
+            m_Device, &allocInfo, m_DescriptorSets);
+        LX_ASSERT(result == VK_SUCCESS, "Failed to allocate descriptor sets");
+        if (result != VK_SUCCESS)
+            return false;
+
+        ::printf("[Lux] Descriptors created\n");
+        return true;
+    }
+
+    void VulkanBackend::UpdateUniformBuffer(u32 frameIndex)
+    {
+        static f32 time = 0.0f;
+        time += 0.016f; //roughly 60fps timestep for now
+
+        GlobalUBO ubo{};
+
+        ubo.model = glm::rotate(
+            glm::mat4(1.0f),
+            time,
+            glm::vec3(0.0f, 0.0f, 1.0f)
+        );
+
+        ubo.view = glm::lookAt(
+            glm::vec3(0.0f, 0.0f, 2.0f),
+            glm::vec3(0.0f, 0.0f, 0.0f),
+            glm::vec3(0.0f, 1.0f, 0.0f)
+        );
+
+        f32 aspect = (f32)m_SwapchainExtent.width/(f32)m_SwapchainExtent.height;
+
+        ubo.projection = glm::perspective(
+            glm::radians(45.0f),
+            aspect,
+            0.1f,
+            100.0f
+        );
+
+        //Vulkan's Y axis is flipped compared to OpenGL
+        ubo.projection[1][1] *= -1.0f;
+
+        ::memcpy(m_UniformMapped[frameIndex], &ubo, sizeof(ubo));
+    }
+
+    BufferHandle VulkanBackend::CreateBuffer(const void* data, usize size, VkBufferUsageFlags usage)
+    {
+        VkBufferCreateInfo stagingInfo{};
+        stagingInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        stagingInfo.size = size;
+        stagingInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+
+        VmaAllocationCreateInfo stagingAllocInfo{};
+        stagingAllocInfo.usage = VMA_MEMORY_USAGE_CPU_ONLY;
+
+        VkBuffer stagingBuffer;
+        VmaAllocation stagingAllocation;
+
+        VkResult result = vmaCreateBuffer(
+            m_Allocator,
+            &stagingInfo, &stagingAllocInfo, &stagingBuffer, &stagingAllocation,
+            nullptr
+        );
+        LX_ASSERT(result == VK_SUCCESS, "Failed to create staging buffer");
+
+        //Copy data into staging buffer
+        void* mapped;
+        vmaMapMemory(m_Allocator, stagingAllocation, &mapped);
+        ::memcpy(mapped, data, size);
+        vmaUnmapMemory(m_Allocator, stagingAllocation);
+
+        //Device local buffer
+        VkBufferCreateInfo bufferInfo{};
+        bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bufferInfo.size = size;
+        bufferInfo.usage = usage | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+
+        VmaAllocationCreateInfo bufferAllocInfo{};
+        bufferAllocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+
+        //Find a free slot in the buffer pool
+        u32 slotIndex = UINT32_MAX;
+        for(u32 i = 0; i < MAX_BUFFERS; i++)
+        {
+            if(!m_Buffers[i].inUse)
+            {
+                slotIndex = i;
+                break;
+            }
+        }
+        LX_ASSERT(slotIndex != UINT32_MAX, "Buffer pool exhausted");
+
+        Buffer& slot = m_Buffers[slotIndex];
+
+        result = vmaCreateBuffer(
+            m_Allocator,
+            &bufferInfo, &bufferAllocInfo, &slot.buffer, &slot.allocation,
+            nullptr
+        );
+        LX_ASSERT(result == VK_SUCCESS, "Failed to create device buffer");
+
+        slot.size = size;
+        slot.inUse = true;
+
+        VkCommandBufferAllocateInfo allocInfo{};
+        allocInfo.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        allocInfo.commandPool        = m_CommandPool;
+        allocInfo.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        allocInfo.commandBufferCount = 1;
+
+        VkCommandBuffer transferCmd;
+        vkAllocateCommandBuffers(m_Device, &allocInfo, &transferCmd);
+
+        VkCommandBufferBeginInfo beginInfo{};
+        beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+        vkBeginCommandBuffer(transferCmd, &beginInfo);
+
+        VkBufferCopy copyRegion{};
+        copyRegion.size = size;
+        vkCmdCopyBuffer(transferCmd, stagingBuffer, slot.buffer, 1, &copyRegion);
+
+        vkEndCommandBuffer(transferCmd);
+
+        VkSubmitInfo submitInfo{};
+        submitInfo.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        submitInfo.commandBufferCount = 1;
+        submitInfo.pCommandBuffers    = &transferCmd;
+
+        vkQueueSubmit(m_GraphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
+        vkQueueWaitIdle(m_GraphicsQueue);
+
+        vkFreeCommandBuffers(m_Device, m_CommandPool, 1, &transferCmd);
+        vmaDestroyBuffer(m_Allocator, stagingBuffer, stagingAllocation);
+
+        BufferHandle handle{};
+        handle.index = slotIndex;
+        return handle;
+    }
+
+    BufferHandle VulkanBackend::CreateVertexBuffer(const void* data, usize size)
+    {
+        return CreateBuffer(data, size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+    }
+
+    void VulkanBackend::DestroyBuffer(BufferHandle handle)
+    {
+        LX_ASSERT(handle.IsValid(), "Destroying invalid buffer handle");
+
+        Buffer& slot = m_Buffers[handle.index];
+        LX_ASSERT(slot.inUse, "Destroying buffer that is not in use");
+
+        vmaDestroyBuffer(m_Allocator, slot.buffer, slot.allocation);
+        slot = Buffer{}; // reset to default - marks inUse = false
+    }
+
+    void VulkanBackend::DrawVertexBuffer(BufferHandle handle, u32 vertexCount)
+    {
+        LX_ASSERT(handle.IsValid(), "Drawing invalid buffer handle");
+
+        VkCommandBuffer cmd = m_CommandBuffers[m_CurrentFrame];
+        Buffer& slot = m_Buffers[handle.index];
+
+        VkBuffer     buffers[] = { slot.buffer };
+        VkDeviceSize offsets[] = { 0 };
+
+        vkCmdBindVertexBuffers(cmd, 0, 1, buffers, offsets);
+        vkCmdDraw(cmd, vertexCount, 1, 0, 0);
+    }
+
+    void VulkanBackend::BeginFrame()
+    {
+        vkWaitForFences(m_Device, 1, &m_InFlightFences[m_CurrentFrame], VK_TRUE, UINT32_MAX);
+        VkResult result = vkAcquireNextImageKHR(
+            m_Device,
+            m_Swapchain,
+            UINT64_MAX,
+            m_ImageAvailableSemaphores[m_CurrentFrame],
+            VK_NULL_HANDLE,
+            &m_CurrentImageIndex);
+
+        LX_ASSERT(result == VK_SUCCESS, "Failed to acquire swapchain image");
+
+        vkResetFences(m_Device, 1, &m_InFlightFences[m_CurrentFrame]);
+
+        VkCommandBuffer cmd = m_CommandBuffers[m_CurrentFrame];
+
+        vkResetCommandBuffer(cmd, 0);
+
+        VkCommandBufferBeginInfo beginInfo{};
+        beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+        result = vkBeginCommandBuffer(cmd, &beginInfo);
+        LX_ASSERT(result == VK_SUCCESS, "Failed to begin command buffer");
+
+        VkClearValue clearColor{};
+        clearColor.color = {{ 0.1f, 0.1f, 0.1f, 1.0f }}; // dark grey
+
+        VkRenderPassBeginInfo renderPassInfo{};
+        renderPassInfo.sType             = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+        renderPassInfo.renderPass        = m_RenderPass;
+        renderPassInfo.framebuffer       = m_Framebuffers[m_CurrentImageIndex];
+        renderPassInfo.renderArea.offset = {0, 0};
+        renderPassInfo.renderArea.extent = m_SwapchainExtent;
+        renderPassInfo.clearValueCount   = 1;
+        renderPassInfo.pClearValues      = &clearColor;
+
+        vkCmdBeginRenderPass(cmd, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+        //Bind the pipeline
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipeline);
+
+        UpdateUniformBuffer(m_CurrentFrame);
+
+        vkCmdBindDescriptorSets(
+            cmd,
+            VK_PIPELINE_BIND_POINT_GRAPHICS,
+            m_PipelineLayout,
+            0, 1,
+            &m_DescriptorSets[m_CurrentFrame],
+            0, nullptr
+        );
+
+    }
+
+    void VulkanBackend::EndFrame()
+    {
+        VkCommandBuffer cmd = m_CommandBuffers[m_CurrentFrame];
+
+        vkCmdEndRenderPass(cmd);
+
+        VkResult result = vkEndCommandBuffer(cmd);
+        LX_ASSERT(result == VK_SUCCESS, "Failed to end command buffer");
+
+        VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+
+        VkSubmitInfo submitInfo{};
+        submitInfo.sType                = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        submitInfo.waitSemaphoreCount   = 1;
+        submitInfo.pWaitSemaphores      = &m_ImageAvailableSemaphores[m_CurrentFrame];
+        submitInfo.pWaitDstStageMask    = &waitStage;
+        submitInfo.commandBufferCount   = 1;
+        submitInfo.pCommandBuffers      = &cmd;
+        submitInfo.signalSemaphoreCount = 1;
+        submitInfo.pSignalSemaphores    = &m_RenderFinishedSemaphores[m_CurrentFrame];
+
+        result = vkQueueSubmit(
+            m_GraphicsQueue, 1, &submitInfo, m_InFlightFences[m_CurrentFrame]);
+        LX_ASSERT(result == VK_SUCCESS, "Failed to submit command buffer");
+
+        VkPresentInfoKHR presentInfo{};
+        presentInfo.sType              = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+        presentInfo.waitSemaphoreCount = 1;
+        presentInfo.pWaitSemaphores    = &m_RenderFinishedSemaphores[m_CurrentFrame];
+        presentInfo.swapchainCount     = 1;
+        presentInfo.pSwapchains        = &m_Swapchain;
+        presentInfo.pImageIndices      = &m_CurrentImageIndex;
+
+        result = vkQueuePresentKHR(m_GraphicsQueue, &presentInfo);
+        LX_ASSERT(result == VK_SUCCESS, "Failed to present swapchain image");
+
+        m_CurrentFrame = (m_CurrentFrame + 1) % m_SwapchainImageCount;
+    }
+}
