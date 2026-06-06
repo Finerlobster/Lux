@@ -76,17 +76,67 @@ int main()
     bool initialized = backend.Init(windowHandle);
     LX_ASSERT(initialized, "Failed to initialize Vulkan backend");
 
-    LX::Vertex triangleVertices[] =
+    LX::Vertex cubeVertices[] =
     {
-        {  0.0f, -0.5f,   1.0f, 0.0f, 0.0f },
-        {  0.5f,  0.5f,   0.0f, 1.0f, 0.0f },
-        { -0.5f,  0.5f,   0.0f, 0.0f, 1.0f },
+        // position              normal              UV
+        // Front face
+        { -0.5f, -0.5f,  0.5f,  0.0f,  0.0f,  1.0f,  0.0f, 0.0f },
+        {  0.5f, -0.5f,  0.5f,  0.0f,  0.0f,  1.0f,  1.0f, 0.0f },
+        {  0.5f,  0.5f,  0.5f,  0.0f,  0.0f,  1.0f,  1.0f, 1.0f },
+        { -0.5f,  0.5f,  0.5f,  0.0f,  0.0f,  1.0f,  0.0f, 1.0f },
+
+        // Back face
+        {  0.5f, -0.5f, -0.5f,  0.0f,  0.0f, -1.0f,  0.0f, 0.0f },
+        { -0.5f, -0.5f, -0.5f,  0.0f,  0.0f, -1.0f,  1.0f, 0.0f },
+        { -0.5f,  0.5f, -0.5f,  0.0f,  0.0f, -1.0f,  1.0f, 1.0f },
+        {  0.5f,  0.5f, -0.5f,  0.0f,  0.0f, -1.0f,  0.0f, 1.0f },
+
+        // Left face
+        { -0.5f, -0.5f, -0.5f, -1.0f,  0.0f,  0.0f,  0.0f, 0.0f },
+        { -0.5f, -0.5f,  0.5f, -1.0f,  0.0f,  0.0f,  1.0f, 0.0f },
+        { -0.5f,  0.5f,  0.5f, -1.0f,  0.0f,  0.0f,  1.0f, 1.0f },
+        { -0.5f,  0.5f, -0.5f, -1.0f,  0.0f,  0.0f,  0.0f, 1.0f },
+
+        // Right face
+        {  0.5f, -0.5f,  0.5f,  1.0f,  0.0f,  0.0f,  0.0f, 0.0f },
+        {  0.5f, -0.5f, -0.5f,  1.0f,  0.0f,  0.0f,  1.0f, 0.0f },
+        {  0.5f,  0.5f, -0.5f,  1.0f,  0.0f,  0.0f,  1.0f, 1.0f },
+        {  0.5f,  0.5f,  0.5f,  1.0f,  0.0f,  0.0f,  0.0f, 1.0f },
+
+        // Top face
+        { -0.5f,  0.5f,  0.5f,  0.0f,  1.0f,  0.0f,  0.0f, 0.0f },
+        {  0.5f,  0.5f,  0.5f,  0.0f,  1.0f,  0.0f,  1.0f, 0.0f },
+        {  0.5f,  0.5f, -0.5f,  0.0f,  1.0f,  0.0f,  1.0f, 1.0f },
+        { -0.5f,  0.5f, -0.5f,  0.0f,  1.0f,  0.0f,  0.0f, 1.0f },
+
+        // Bottom face
+        { -0.5f, -0.5f, -0.5f,  0.0f, -1.0f,  0.0f,  0.0f, 0.0f },
+        {  0.5f, -0.5f, -0.5f,  0.0f, -1.0f,  0.0f,  1.0f, 0.0f },
+        {  0.5f, -0.5f,  0.5f,  0.0f, -1.0f,  0.0f,  1.0f, 1.0f },
+        { -0.5f, -0.5f,  0.5f,  0.0f, -1.0f,  0.0f,  0.0f, 1.0f },
     };
 
-    LX::BufferHandle triangleBuffer = backend.CreateVertexBuffer(
-        triangleVertices, sizeof(triangleVertices));
+    LX::u32 cubeIndices[] =
+    {
+        0,  1,  2,   2,  3,  0,  // front
+        4,  5,  6,   6,  7,  4,  // back
+        8,  9, 10,  10, 11,  8,  // left
+        12, 13, 14,  14, 15, 12,  // right
+        16, 17, 18,  18, 19, 16,  // top
+        20, 21, 22,  22, 23, 20,  // bottom
+    };
 
-    LX_ASSERT(triangleBuffer.IsValid(), "Failed to create triangle buffer");
+    LX::BufferHandle vertexBuffer = backend.CreateVertexBuffer(
+        cubeVertices, sizeof(cubeVertices));
+
+    LX::BufferHandle indexBuffer = backend.CreateIndexBuffer(
+        cubeIndices, sizeof(cubeIndices));
+
+    LX_ASSERT(vertexBuffer.IsValid(), "Failed to create vertex buffer");
+    LX_ASSERT(indexBuffer.IsValid(),  "Failed to create index buffer");
+
+    LX::TextureHandle texture = backend.CreateTexture("test.jpg");
+    LX_ASSERT(texture.IsValid(), "Failed to load texture");
 
     // Step 7: Message + render loop
     MSG msg{};
@@ -101,7 +151,7 @@ int main()
 
         // Frame work goes here
         backend.BeginFrame();
-        backend.DrawVertexBuffer(triangleBuffer, 3);
+        backend.DrawIndexed(vertexBuffer, indexBuffer, 36, texture);
         backend.EndFrame();
     }
 

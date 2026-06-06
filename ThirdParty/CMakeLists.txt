@@ -24,3 +24,7 @@ target_link_libraries(vma PUBLIC volk)
 # GLM - header only
 add_library(glm INTERFACE)
 target_include_directories(glm INTERFACE glm/)
+
+# STB
+add_library(stb STATIC stb/stb_impl.cpp)
+target_include_directories(stb PUBLIC stb/)

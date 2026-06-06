@@ -13,9 +13,17 @@ namespace LX {
         virtual void BeginFrame() = 0;
         virtual void EndFrame() = 0;
 
+        //Buffers API
         virtual BufferHandle CreateVertexBuffer(const void* data, usize size) = 0;
+        virtual BufferHandle CreateIndexBuffer(const void* data, usize size) = 0;
         virtual void DestroyBuffer(BufferHandle handle) = 0;
+    
+        //Texture API
+        virtual TextureHandle CreateTexture(const char* path) = 0;
+        virtual void DestroyTexture(TextureHandle handle) = 0;
 
-        virtual void DrawVertexBuffer(BufferHandle handle, u32 vertexCount) = 0;
+        //Draw API
+        virtual void DrawIndexed(BufferHandle vertexBuffer, BufferHandle indexBuffer, u32 indexCount, TextureHandle texture) = 0;
+    
     };
 }

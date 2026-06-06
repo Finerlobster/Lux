@@ -3,6 +3,7 @@
 #include "Core/IRendererBackend.h"
 #include "Core/Buffer.h"
 #include "Core/UniformBuffer.h"
+#include "Core/Texture.h"
 #include <volk.h>
 #include <vk_mem_alloc.h>
 
@@ -21,9 +22,15 @@ namespace LX {
         void Shutdown()     override;
         void BeginFrame()   override;
         void EndFrame()     override;
+        
         BufferHandle CreateVertexBuffer(const void* data, usize size) override;
+        BufferHandle CreateIndexBuffer(const void* data, usize size) override;
         void DestroyBuffer(BufferHandle handle) override;
-        void DrawVertexBuffer(BufferHandle handle, u32 vertexCount) override;
+
+        TextureHandle CreateTexture(const char* path) override;
+        void DestroyTexture(TextureHandle handle) override;
+        
+        void DrawIndexed(BufferHandle vertexBuffer, BufferHandle indexBuffer, u32 indexCount, TextureHandle texture) override;
 
     private:
         bool InitInstance();
@@ -39,10 +46,15 @@ namespace LX {
         bool InitPipeline();
         bool InitUniformBuffers();
         bool InitDescriptors();
+        bool InitDepthBuffer();
+        bool InitSampler();
         void UpdateUniformBuffer(u32 frameIndex);
+        
 
         //Internal helper - does the actual staging and copy work
         BufferHandle CreateBuffer(const void* data, usize size, VkBufferUsageFlags usage);
+
+        VkFormat FindDepthFormat();
 
         //Instance
         VkInstance m_Instance               = VK_NULL_HANDLE;
@@ -92,11 +104,25 @@ namespace LX {
         VmaAllocation m_UniformAllocations[MAX_SWAPCHAIN_IMAGES] = {};
         void* m_UniformMapped[MAX_SWAPCHAIN_IMAGES] = {};
 
+        //Light uniform buffers
+        VkBuffer m_LightBuffers[MAX_SWAPCHAIN_IMAGES] = {};
+        VmaAllocation m_LightAllocations[MAX_SWAPCHAIN_IMAGES] = {};
+        void* m_LightMapped[MAX_SWAPCHAIN_IMAGES] = {};
+
         //Descriptors
         VkDescriptorSetLayout m_DescriptorSetLayout = VK_NULL_HANDLE;
         VkDescriptorPool m_DescriptorPool = VK_NULL_HANDLE;
         VkDescriptorSet m_DescriptorSets[MAX_SWAPCHAIN_IMAGES] = {};
 
+        //Depth Buffer
+        VkImage        m_DepthImage      = VK_NULL_HANDLE;
+        VmaAllocation  m_DepthAllocation = VK_NULL_HANDLE;
+        VkImageView    m_DepthImageView  = VK_NULL_HANDLE;
+        VkFormat       m_DepthFormat     = VK_FORMAT_UNDEFINED;
+
+        //Textures
+        Texture m_Textures[MAX_TEXTURES] = {};
+        VkSampler m_Sampler = VK_NULL_HANDLE;
 
         #if defined(LX_DEBUG)
             VkDebugUtilsMessengerEXT m_DebugMessenger = VK_NULL_HANDLE;

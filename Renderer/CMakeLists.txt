@@ -16,6 +16,7 @@ target_link_libraries(Lux
         volk
         vma
         glm
+        stb
     PRIVATE
 )
 

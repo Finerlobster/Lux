@@ -8,8 +8,9 @@ namespace LX {
 
     struct Vertex {
 
-        f32 x, y;
-        f32 r, g, b;
+        f32 x, y, z;
+        f32 nx, ny, nz;
+        f32 u, v;
         
         // Describes how frequently vertex data is fed to the shader.
         // VERTEX means move to the next vertex for each vertex.
@@ -28,19 +29,27 @@ namespace LX {
         // One description per shader input variable.
         static void GetAttributeDescriptions(VkVertexInputAttributeDescription* out, u32* count)
         {
-            *count = 2;
+            *count = 3;
 
-            // Attribute 0 — position (vec2 = 2 floats)
+            // Attribute 0 — position (vec3)
             out[0].binding  = 0;
             out[0].location = 0;
-            out[0].format   = VK_FORMAT_R32G32_SFLOAT;
+            out[0].format   = VK_FORMAT_R32G32B32_SFLOAT;
             out[0].offset   = offsetof(Vertex, x);
 
-            // Attribute 1 — color (vec3 = 3 floats)
-            out[1].binding  = 0;
+            // Attribute 1 — normal (vec3)
+            out[1].binding  = 0; 
             out[1].location = 1;
             out[1].format   = VK_FORMAT_R32G32B32_SFLOAT;
-            out[1].offset   = offsetof(Vertex, r);
+            out[1].offset   = offsetof(Vertex, nx);
+
+            // Attribute 2 - UV (vec2)
+            out[2].binding  = 0;
+            out[2].location = 2;
+            out[2].format   = VK_FORMAT_R32G32_SFLOAT;
+            out[2].offset   = offsetof(Vertex, u);
+
+
         }
     };
 }

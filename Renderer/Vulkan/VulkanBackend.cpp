@@ -3,6 +3,7 @@
 #include "Core/Vertex.h"
 #include "Core/Assert.h"
 
+#include <stb_image.h>
 #include <cstdio>
 #include <cstring>
 
@@ -36,7 +37,6 @@ namespace LX {
             file = ::fopen(path, "rb");
         #endif 
 
-        fopen_s(&file, path, "rb");
         if(!file)
         {
             ::fprintf(stderr, "[Lux] Failed to open shader: %s\n", path);
@@ -82,6 +82,7 @@ namespace LX {
         if(!InitDevice()) return false;
         if(!InitAllocator()) return false;
         if(!InitSwapchain()) return false;
+        if(!InitDepthBuffer()) return false;
         if(!InitRenderPass()) return false;
         if(!InitDescriptors()) return false;
         if(!InitFramebuffers()) return false;
@@ -89,6 +90,7 @@ namespace LX {
         if(!InitSyncObjects()) return false;
         if(!InitUniformBuffers()) return false;
         if(!InitPipeline()) return false;
+        if(!InitSampler()) return false;
 
         ::printf("Vulkan initialized successfully\n");
         return true;
@@ -191,56 +193,6 @@ namespace LX {
             // Wait for the GPU to finish all work before destroying anything
             vkDeviceWaitIdle(m_Device);
 
-            //Destroy all active buffers
-            for (u32 i = 0; i < MAX_BUFFERS; i++)
-            {
-                if (m_Buffers[i].inUse)
-                {
-                    vmaDestroyBuffer(
-                        m_Allocator, m_Buffers[i].buffer, m_Buffers[i].allocation);
-                    m_Buffers[i] = Buffer{};
-                }
-            }
-            ::printf("[Lux] Buffer pool cleared\n");
-
-            //Destroy uniform buffers
-            for (u32 i = 0; i < m_SwapchainImageCount; i++)
-            {
-                if (m_UniformBuffers[i] != VK_NULL_HANDLE)
-                {
-                    vmaDestroyBuffer(
-                        m_Allocator, m_UniformBuffers[i], m_UniformAllocations[i]);
-                    m_UniformBuffers[i]     = VK_NULL_HANDLE;
-                    m_UniformAllocations[i] = VK_NULL_HANDLE;
-                }
-            }
-            ::printf("[Lux] Uniform buffers destroyed\n");
-
-            //Destroy descriptor pool
-            //Destroying the pool implicitly frees all descriptor sets
-            if (m_DescriptorPool != VK_NULL_HANDLE)
-            {
-                vkDestroyDescriptorPool(m_Device, m_DescriptorPool, nullptr);
-                m_DescriptorPool = VK_NULL_HANDLE;
-                ::printf("[Lux] Descriptor pool destroyed\n");
-            }
-
-            // Destroy descriptor set layout
-            if (m_DescriptorSetLayout != VK_NULL_HANDLE)
-            {
-                vkDestroyDescriptorSetLayout(m_Device, m_DescriptorSetLayout, nullptr);
-                m_DescriptorSetLayout = VK_NULL_HANDLE;
-                ::printf("[Lux] Descriptor set layout destroyed\n");
-            }
-
-            // Destroy allocator
-            if (m_Allocator != VK_NULL_HANDLE)
-            {
-                vmaDestroyAllocator(m_Allocator);
-                m_Allocator = VK_NULL_HANDLE;
-                ::printf("[Lux] VMA allocator destroyed\n");
-            }
-
             //Destroy Synchronization objects
             for (u32 i = 0; i < m_SwapchainImageCount; i++)
             {
@@ -309,6 +261,20 @@ namespace LX {
                 ::printf("[Lux] RenderPass destroyed\n");
             }
 
+            //Destroy depth buffer
+            if (m_DepthImageView != VK_NULL_HANDLE)
+            {
+                vkDestroyImageView(m_Device, m_DepthImageView, nullptr);
+                m_DepthImageView = VK_NULL_HANDLE;
+            }
+            if (m_DepthImage != VK_NULL_HANDLE)
+            {
+                vmaDestroyImage(m_Allocator, m_DepthImage, m_DepthAllocation);
+                m_DepthImage      = VK_NULL_HANDLE;
+                m_DepthAllocation = VK_NULL_HANDLE;
+                ::printf("[Lux] Depth buffer destroyed\n");
+            }
+
             //Destroy ImageViews
             for(u32 i = 0; i < m_SwapchainImageCount; i++)
             {
@@ -327,6 +293,83 @@ namespace LX {
                 ::printf("[Lux] Swapchain destroyed\n");
             }
 
+            //Destroy uniform buffers
+            for (u32 i = 0; i < m_SwapchainImageCount; i++)
+            {
+                if (m_UniformBuffers[i] != VK_NULL_HANDLE)
+                {
+                    vmaDestroyBuffer(m_Allocator, m_UniformBuffers[i], m_UniformAllocations[i]);
+                    m_UniformBuffers[i]     = VK_NULL_HANDLE;
+                    m_UniformAllocations[i] = VK_NULL_HANDLE;
+                }
+                if(m_LightBuffers[i] != VK_NULL_HANDLE)
+                {
+                    vmaDestroyBuffer(m_Allocator, m_LightBuffers[i], m_LightAllocations[i]);
+                    m_LightBuffers[i] = VK_NULL_HANDLE;
+                    m_LightAllocations[i] = VK_NULL_HANDLE;
+                }
+            }
+            ::printf("[Lux] Uniform buffers destroyed\n");
+
+            //Destroy descriptor pool
+            //Destroying the pool implicitly frees all descriptor sets
+            if (m_DescriptorPool != VK_NULL_HANDLE)
+            {
+                vkDestroyDescriptorPool(m_Device, m_DescriptorPool, nullptr);
+                m_DescriptorPool = VK_NULL_HANDLE;
+                ::printf("[Lux] Descriptor pool destroyed\n");
+            }
+
+            // Destroy descriptor set layout
+            if (m_DescriptorSetLayout != VK_NULL_HANDLE)
+            {
+                vkDestroyDescriptorSetLayout(m_Device, m_DescriptorSetLayout, nullptr);
+                m_DescriptorSetLayout = VK_NULL_HANDLE;
+                ::printf("[Lux] Descriptor set layout destroyed\n");
+            }
+
+            // Destroy all active textures
+            for (u32 i = 0; i < MAX_TEXTURES; i++)
+            {
+                if (m_Textures[i].inUse)
+                {
+                    vkDestroyImageView(m_Device, m_Textures[i].view, nullptr);
+                    vmaDestroyImage(
+                        m_Allocator, m_Textures[i].image, m_Textures[i].allocation);
+                    m_Textures[i] = Texture{};
+                }
+            }
+            ::printf("[Lux] Texture pool cleared\n");
+
+            //Destroy all active buffers
+            for (u32 i = 0; i < MAX_BUFFERS; i++)
+            {
+                if (m_Buffers[i].inUse)
+                {
+                    vmaDestroyBuffer(
+                        m_Allocator, m_Buffers[i].buffer, m_Buffers[i].allocation);
+                    m_Buffers[i] = Buffer{};
+                }
+            }
+            ::printf("[Lux] Buffer pool cleared\n");
+
+            // Destroy allocator
+            if (m_Allocator != VK_NULL_HANDLE)
+            {
+                vmaDestroyAllocator(m_Allocator);
+                m_Allocator = VK_NULL_HANDLE;
+                ::printf("[Lux] VMA allocator destroyed\n");
+            }
+
+            // Destroy Sampler
+            if(m_Sampler != VK_NULL_HANDLE)
+            {
+                vkDestroySampler(m_Device, m_Sampler, nullptr);
+                m_Sampler = VK_NULL_HANDLE;
+                ::printf("[Lux] Sampler destroyed\n");
+            }
+
+            // Destroy Device
             vkDestroyDevice(m_Device, nullptr);
             m_Device = VK_NULL_HANDLE;
             ::printf("[Lux] Logical device destroyed\n");
@@ -480,6 +523,7 @@ namespace LX {
         };
 
         VkPhysicalDeviceFeatures features{};
+        features.samplerAnisotropy = VK_TRUE;
 
         VkDeviceCreateInfo createInfo{};
         createInfo.sType                   = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -633,9 +677,10 @@ namespace LX {
 
     bool VulkanBackend::InitRenderPass()
     {
+        // ── Color attachment ──────────────────────────────────────────────────
         VkAttachmentDescription colorAttachment{};
         colorAttachment.format         = m_SwapchainFormat;
-        colorAttachment.samples        = VK_SAMPLE_COUNT_1_BIT; // no multisampling yet
+        colorAttachment.samples        = VK_SAMPLE_COUNT_1_BIT;
         colorAttachment.loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR;
         colorAttachment.storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
         colorAttachment.stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
@@ -643,33 +688,63 @@ namespace LX {
         colorAttachment.initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
         colorAttachment.finalLayout    = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
 
-        VkAttachmentReference colorAttachmentRef{};
-        colorAttachmentRef.attachment = 0; // index into the attachments array
-        colorAttachmentRef.layout     = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        // ── Depth attachment ──────────────────────────────────────────────────
+        VkAttachmentDescription depthAttachment{};
+        depthAttachment.format         = m_DepthFormat;
+        depthAttachment.samples        = VK_SAMPLE_COUNT_1_BIT;
+        depthAttachment.loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        depthAttachment.storeOp        = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        depthAttachment.stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        depthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        depthAttachment.initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
+        depthAttachment.finalLayout    =
+            VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
+        // ── Attachment references ─────────────────────────────────────────────
+        VkAttachmentReference colorRef{};
+        colorRef.attachment = 0;
+        colorRef.layout     = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+        VkAttachmentReference depthRef{};
+        depthRef.attachment = 1;
+        depthRef.layout     = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+        // ── Subpass ───────────────────────────────────────────────────────────
         VkSubpassDescription subpass{};
         subpass.pipelineBindPoint       = VK_PIPELINE_BIND_POINT_GRAPHICS;
         subpass.colorAttachmentCount    = 1;
-        subpass.pColorAttachments       = &colorAttachmentRef;
+        subpass.pColorAttachments       = &colorRef;
+        subpass.pDepthStencilAttachment = &depthRef;
 
+        // ── Dependency ────────────────────────────────────────────────────────
         VkSubpassDependency dependency{};
         dependency.srcSubpass    = VK_SUBPASS_EXTERNAL;
         dependency.dstSubpass    = 0;
-        dependency.srcStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dependency.srcStageMask  =
+            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+            VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
         dependency.srcAccessMask = 0;
-        dependency.dstStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        dependency.dstStageMask  =
+            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+            VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+        dependency.dstAccessMask =
+            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+            VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+
+        // ── Create render pass ────────────────────────────────────────────────
+        VkAttachmentDescription attachments[] = { colorAttachment, depthAttachment };
 
         VkRenderPassCreateInfo createInfo{};
         createInfo.sType           = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-        createInfo.attachmentCount = 1;
-        createInfo.pAttachments    = &colorAttachment;
+        createInfo.attachmentCount = 2;
+        createInfo.pAttachments    = attachments;
         createInfo.subpassCount    = 1;
         createInfo.pSubpasses      = &subpass;
         createInfo.dependencyCount = 1;
         createInfo.pDependencies   = &dependency;
 
-        VkResult result = vkCreateRenderPass(m_Device, &createInfo, nullptr, &m_RenderPass);
+        VkResult result = vkCreateRenderPass(
+            m_Device, &createInfo, nullptr, &m_RenderPass);
 
         LX_ASSERT(result == VK_SUCCESS, "Failed to create render pass");
         if (result != VK_SUCCESS)
@@ -683,12 +758,12 @@ namespace LX {
     {
         for(u32 i = 0; i < m_SwapchainImageCount; i++)
         {
-            VkImageView attachments[] = { m_SwapchainImageViews[i]} ;
+            VkImageView attachments[] = { m_SwapchainImageViews[i], m_DepthImageView} ;
 
             VkFramebufferCreateInfo createInfo{};
             createInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
             createInfo.renderPass = m_RenderPass;
-            createInfo.attachmentCount = 1;
+            createInfo.attachmentCount = 2;
             createInfo.pAttachments = attachments;
             createInfo.width = m_SwapchainExtent.width;
             createInfo.height = m_SwapchainExtent.height;
@@ -794,7 +869,7 @@ namespace LX {
         VkPipelineShaderStageCreateInfo shaderStages[] = { vertStage, fragStage };
 
         VkVertexInputBindingDescription bindingDescription = Vertex::GetBindingDescription();
-        VkVertexInputAttributeDescription attributeDescriptions[2];
+        VkVertexInputAttributeDescription attributeDescriptions[3];
         u32 attributeCount = 0;
         Vertex::GetAttributeDescriptions(attributeDescriptions, &attributeCount);
 
@@ -843,6 +918,14 @@ namespace LX {
         multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
         multisampling.sampleShadingEnable  = VK_FALSE;
 
+        VkPipelineDepthStencilStateCreateInfo depthStencil{};
+        depthStencil.sType                 = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+        depthStencil.depthTestEnable       = VK_TRUE;
+        depthStencil.depthWriteEnable      = VK_TRUE;
+        depthStencil.depthCompareOp        = VK_COMPARE_OP_LESS;
+        depthStencil.depthBoundsTestEnable = VK_FALSE;
+        depthStencil.stencilTestEnable     = VK_FALSE;
+
         //Color Blending
         VkPipelineColorBlendAttachmentState colorBlendAttachment{};
         colorBlendAttachment.colorWriteMask =
@@ -878,7 +961,7 @@ namespace LX {
         pipelineInfo.pViewportState      = &viewportState;
         pipelineInfo.pRasterizationState = &rasterizer;
         pipelineInfo.pMultisampleState   = &multisampling;
-        pipelineInfo.pDepthStencilState  = nullptr; // no depth buffer yet
+        pipelineInfo.pDepthStencilState  = &depthStencil;
         pipelineInfo.pColorBlendState    = &colorBlending;
         pipelineInfo.pDynamicState       = nullptr;
         pipelineInfo.layout              = m_PipelineLayout;
@@ -921,54 +1004,58 @@ namespace LX {
 
     bool VulkanBackend::InitUniformBuffers()
     {
-        VkDeviceSize bufferSize = sizeof(GlobalUBO);
+        VkDeviceSize transformSize = sizeof(GlobalUBO);
+        VkDeviceSize lightSize     = sizeof(LightUBO);
 
         for (u32 i = 0; i < m_SwapchainImageCount; i++)
         {
-            VkBufferCreateInfo bufferInfo{};
-            bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-            bufferInfo.size  = bufferSize;
-            bufferInfo.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+            // Transform buffer
+            {
+                VkBufferCreateInfo bufferInfo{};
+                bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+                bufferInfo.size  = transformSize;
+                bufferInfo.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
 
-            VmaAllocationCreateInfo allocInfo{};
-            allocInfo.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
-            allocInfo.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
+                VmaAllocationCreateInfo allocInfo{};
+                allocInfo.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
+                allocInfo.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
 
-            VmaAllocationInfo allocationInfo{};
+                VmaAllocationInfo allocationInfo{};
+                VkResult result = vmaCreateBuffer(
+                    m_Allocator,
+                    &bufferInfo, &allocInfo,
+                    &m_UniformBuffers[i], &m_UniformAllocations[i],
+                    &allocationInfo);
 
-            VkResult result = vmaCreateBuffer(
-                m_Allocator,
-                &bufferInfo, &allocInfo,
-                &m_UniformBuffers[i], &m_UniformAllocations[i],
-                &allocationInfo);
+                LX_ASSERT(result == VK_SUCCESS, "Failed to create transform buffer");
+                if (result != VK_SUCCESS) return false;
 
-            LX_ASSERT(result == VK_SUCCESS, "Failed to create uniform buffer");
-            if (result != VK_SUCCESS)
-                return false;
+                m_UniformMapped[i] = allocationInfo.pMappedData;
+            }
 
-            // Keep a persistent mapped pointer — uniform buffers are
-            // written every frame so we never unmap them
-            m_UniformMapped[i] = allocationInfo.pMappedData;
-        }
+            // Light buffer
+            {
+                VkBufferCreateInfo bufferInfo{};
+                bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+                bufferInfo.size  = lightSize;
+                bufferInfo.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
 
-        //Wire each descriptor set to its uniform buffer
-        for (u32 i = 0; i < m_SwapchainImageCount; i++)
-        {
-            VkDescriptorBufferInfo bufferInfo{};
-            bufferInfo.buffer = m_UniformBuffers[i];
-            bufferInfo.offset = 0;
-            bufferInfo.range  = sizeof(GlobalUBO);
+                VmaAllocationCreateInfo allocInfo{};
+                allocInfo.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
+                allocInfo.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
 
-            VkWriteDescriptorSet write{};
-            write.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            write.dstSet          = m_DescriptorSets[i];
-            write.dstBinding      = 0;
-            write.dstArrayElement = 0;
-            write.descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-            write.descriptorCount = 1;
-            write.pBufferInfo     = &bufferInfo;
+                VmaAllocationInfo allocationInfo{};
+                VkResult result = vmaCreateBuffer(
+                    m_Allocator,
+                    &bufferInfo, &allocInfo,
+                    &m_LightBuffers[i], &m_LightAllocations[i],
+                    &allocationInfo);
 
-            vkUpdateDescriptorSets(m_Device, 1, &write, 0, nullptr);
+                LX_ASSERT(result == VK_SUCCESS, "Failed to create light buffer");
+                if (result != VK_SUCCESS) return false;
+
+                m_LightMapped[i] = allocationInfo.pMappedData;
+            }
         }
 
         ::printf("[Lux] Uniform buffers created\n");
@@ -977,19 +1064,31 @@ namespace LX {
 
     bool VulkanBackend::InitDescriptors()
     {
-        //Descriptor Set Layout
-        //Tells Vulkan what resources the shaders expect
-        VkDescriptorSetLayoutBinding uboBinding{};
-        uboBinding.binding            = 0;
-        uboBinding.descriptorType     = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        uboBinding.descriptorCount    = 1;
-        uboBinding.stageFlags         = VK_SHADER_STAGE_VERTEX_BIT;
-        uboBinding.pImmutableSamplers = nullptr;
+        // ── Descriptor Set Layout ─────────────────────────────────────────────
+        VkDescriptorSetLayoutBinding bindings[3] = {};
+
+        // Binding 0 — uniform buffer
+        bindings[0].binding            = 0;
+        bindings[0].descriptorType     = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        bindings[0].descriptorCount    = 1;
+        bindings[0].stageFlags         = VK_SHADER_STAGE_VERTEX_BIT;
+
+        // Binding 1 — combined image sampler
+        bindings[1].binding            = 1;
+        bindings[1].descriptorType     = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bindings[1].descriptorCount    = 1;
+        bindings[1].stageFlags         = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+        // Binding 2 — light uniform buffer
+        bindings[2].binding         = 2;
+        bindings[2].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        bindings[2].descriptorCount = 1;
+        bindings[2].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
 
         VkDescriptorSetLayoutCreateInfo layoutInfo{};
         layoutInfo.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        layoutInfo.bindingCount = 1;
-        layoutInfo.pBindings    = &uboBinding;
+        layoutInfo.bindingCount = 3;
+        layoutInfo.pBindings    = bindings;
 
         VkResult result = vkCreateDescriptorSetLayout(
             m_Device, &layoutInfo, nullptr, &m_DescriptorSetLayout);
@@ -997,17 +1096,18 @@ namespace LX {
         if (result != VK_SUCCESS)
             return false;
 
-        //Descriptor Pool
-        //Pre-allocates memory for descriptor sets
-        VkDescriptorPoolSize poolSize{};
-        poolSize.type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        poolSize.descriptorCount = MAX_SWAPCHAIN_IMAGES;
+        // ── Descriptor Pool ───────────────────────────────────────────────────
+        VkDescriptorPoolSize poolSizes[2] = {};
+        poolSizes[0].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        poolSizes[0].descriptorCount = MAX_SWAPCHAIN_IMAGES * 2; //transform + light
+        poolSizes[1].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        poolSizes[1].descriptorCount = MAX_SWAPCHAIN_IMAGES;
 
         VkDescriptorPoolCreateInfo poolInfo{};
         poolInfo.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         poolInfo.maxSets       = MAX_SWAPCHAIN_IMAGES;
-        poolInfo.poolSizeCount = 1;
-        poolInfo.pPoolSizes    = &poolSize;
+        poolInfo.poolSizeCount = 2;
+        poolInfo.pPoolSizes    = poolSizes;
 
         result = vkCreateDescriptorPool(
             m_Device, &poolInfo, nullptr, &m_DescriptorPool);
@@ -1015,8 +1115,7 @@ namespace LX {
         if (result != VK_SUCCESS)
             return false;
 
-        //Descriptor Sets
-        //Allocate one descriptor set per frame in flight
+        // ── Allocate descriptor sets ──────────────────────────────────────────
         VkDescriptorSetLayout layouts[MAX_SWAPCHAIN_IMAGES];
         for (u32 i = 0; i < m_SwapchainImageCount; i++)
             layouts[i] = m_DescriptorSetLayout;
@@ -1037,10 +1136,100 @@ namespace LX {
         return true;
     }
 
+    bool VulkanBackend::InitDepthBuffer()
+    {
+        m_DepthFormat = FindDepthFormat();
+
+        // ── Create depth image ────────────────────────────────────────────────
+        VkImageCreateInfo imageInfo{};
+        imageInfo.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        imageInfo.imageType     = VK_IMAGE_TYPE_2D;
+        imageInfo.format        = m_DepthFormat;
+        imageInfo.extent.width  = m_SwapchainExtent.width;
+        imageInfo.extent.height = m_SwapchainExtent.height;
+        imageInfo.extent.depth  = 1;
+        imageInfo.mipLevels     = 1;
+        imageInfo.arrayLayers   = 1;
+        imageInfo.samples       = VK_SAMPLE_COUNT_1_BIT;
+        imageInfo.tiling        = VK_IMAGE_TILING_OPTIMAL;
+        imageInfo.usage         = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+        VmaAllocationCreateInfo allocInfo{};
+        allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+
+        VkResult result = vmaCreateImage(
+            m_Allocator,
+            &imageInfo, &allocInfo,
+            &m_DepthImage, &m_DepthAllocation,
+            nullptr);
+
+        LX_ASSERT(result == VK_SUCCESS, "Failed to create depth image");
+        if (result != VK_SUCCESS)
+            return false;
+
+        // ── Create depth image view ───────────────────────────────────────────
+        VkImageViewCreateInfo viewInfo{};
+        viewInfo.sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.image    = m_DepthImage;
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.format   = m_DepthFormat;
+
+        viewInfo.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_DEPTH_BIT;
+        viewInfo.subresourceRange.baseMipLevel   = 0;
+        viewInfo.subresourceRange.levelCount     = 1;
+        viewInfo.subresourceRange.baseArrayLayer = 0;
+        viewInfo.subresourceRange.layerCount     = 1;
+
+        result = vkCreateImageView(
+            m_Device, &viewInfo, nullptr, &m_DepthImageView);
+
+        LX_ASSERT(result == VK_SUCCESS, "Failed to create depth image view");
+        if (result != VK_SUCCESS)
+            return false;
+
+        ::printf("[Lux] Depth buffer created (%ux%u)\n",
+            m_SwapchainExtent.width, m_SwapchainExtent.height);
+
+        return true;
+    }
+
+    bool VulkanBackend::InitSampler()
+    {
+        VkSamplerCreateInfo samplerInfo{};
+        samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+
+        samplerInfo.magFilter = VK_FILTER_LINEAR;
+        samplerInfo.minFilter = VK_FILTER_LINEAR;
+
+        samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+
+        samplerInfo.anisotropyEnable = VK_TRUE;
+        samplerInfo.maxAnisotropy = 16.0f;
+
+        samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+        samplerInfo.mipLodBias = 0.0f;
+        samplerInfo.minLod = 0.0f;
+        samplerInfo.maxLod = 0.0f;
+
+        VkResult result = vkCreateSampler(m_Device, &samplerInfo, nullptr, &m_Sampler);
+        LX_ASSERT(result == VK_SUCCESS, "Failed to create sampler");
+        if(result != VK_SUCCESS)
+            return false;
+
+        ::printf("[Lux] Sampler created\n");
+        return true;
+    }
+
     void VulkanBackend::UpdateUniformBuffer(u32 frameIndex)
     {
         static f32 time = 0.0f;
-        time += 0.016f; //roughly 60fps timestep for now
+        //time += 0.016f; //roughly 60fps timestep for now
+        time += 0.001f;
+
+        glm::vec3 cameraPos = glm::vec3(0.0f, 1.0f, 3.0f);
 
         GlobalUBO ubo{};
 
@@ -1051,7 +1240,7 @@ namespace LX {
         );
 
         ubo.view = glm::lookAt(
-            glm::vec3(0.0f, 0.0f, 2.0f),
+            glm::vec3(0.0f, 1.0f, 3.0f),
             glm::vec3(0.0f, 0.0f, 0.0f),
             glm::vec3(0.0f, 1.0f, 0.0f)
         );
@@ -1067,8 +1256,47 @@ namespace LX {
 
         //Vulkan's Y axis is flipped compared to OpenGL
         ubo.projection[1][1] *= -1.0f;
+        
+        ubo.cameraPos = glm::vec4(cameraPos, 1.0f);
 
         ::memcpy(m_UniformMapped[frameIndex], &ubo, sizeof(ubo));
+
+        LightUBO light{};
+
+        light.direction = glm::vec4(glm::normalize(glm::vec3(-0.5f, -1.0f, -0.5f)), 0.0f);
+        light.color = glm::vec4(1.0f, 0.95f, 0.8f, 1.0f); //warm white
+        light.ambient = glm::vec4(0.15f, 0.15f, 0.2f, 1.0f); //cool dark ambient
+
+        ::memcpy(m_LightMapped[frameIndex], &light, sizeof(light));
+
+    }
+
+    VkFormat VulkanBackend::FindDepthFormat()
+    {
+        // Formats we're willing to use in order of preference
+        VkFormat candidates[] =
+        {
+            VK_FORMAT_D32_SFLOAT,
+            VK_FORMAT_D32_SFLOAT_S8_UINT,
+            VK_FORMAT_D24_UNORM_S8_UINT
+        };
+
+        for (u32 i = 0; i < 3; i++)
+        {
+            VkFormatProperties props;
+            vkGetPhysicalDeviceFormatProperties(
+                m_PhysicalDevice, candidates[i], &props);
+
+            // Check if this format supports depth stencil attachment
+            if (props.optimalTilingFeatures &
+                VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT)
+            {
+                return candidates[i];
+            }
+        }
+
+        LX_ASSERT(false, "Failed to find supported depth format");
+        return VK_FORMAT_UNDEFINED;
     }
 
     BufferHandle VulkanBackend::CreateBuffer(const void* data, usize size, VkBufferUsageFlags usage)
@@ -1172,6 +1400,201 @@ namespace LX {
         return CreateBuffer(data, size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
     }
 
+    BufferHandle VulkanBackend::CreateIndexBuffer(const void* data, usize size)
+    {
+        return CreateBuffer(data, size, VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
+    }
+
+    TextureHandle VulkanBackend::CreateTexture(const char* path)
+    {
+        //Load image from disk
+        i32 width, height, channels;
+        ::printf("[Lux] Attempting to load texture: %s\n", path);
+        stbi_uc* pixels = stbi_load(path, &width, &height, &channels, STBI_rgb_alpha);
+
+        if(!pixels){
+            ::printf("[Lux] stb error: %s\n", stbi_failure_reason());
+            LX_ASSERT(false, "Failed to load texture");
+            return TextureHandle{};
+        }
+
+        VkDeviceSize imageSize = (VkDeviceSize)(width * height * 4);
+
+        //Upload to staging buffer
+        VkBufferCreateInfo stagingInfo{};
+        stagingInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        stagingInfo.size = imageSize;
+        stagingInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+
+        VmaAllocationCreateInfo stagingAllocInfo{};
+        stagingAllocInfo.usage = VMA_MEMORY_USAGE_CPU_ONLY;
+
+        VkBuffer stagingBuffer;
+        VmaAllocation stagingAllocation;
+
+        vmaCreateBuffer(
+            m_Allocator,
+            &stagingInfo, &stagingAllocInfo,
+            &stagingBuffer, &stagingAllocation,
+            nullptr
+        );
+
+        void* mapped;
+        vmaMapMemory(m_Allocator, stagingAllocation, &mapped);
+        ::memcpy(mapped, pixels, (usize)imageSize);
+        vmaUnmapMemory(m_Allocator, stagingAllocation);
+
+        stbi_image_free(pixels);
+
+        // ── Create GPU image ──────────────────────────────────────────────────
+        VkImageCreateInfo imageInfo{};
+        imageInfo.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        imageInfo.imageType     = VK_IMAGE_TYPE_2D;
+        imageInfo.format        = VK_FORMAT_R8G8B8A8_SRGB;
+        imageInfo.extent.width  = (u32)width;
+        imageInfo.extent.height = (u32)height;
+        imageInfo.extent.depth  = 1;
+        imageInfo.mipLevels     = 1;
+        imageInfo.arrayLayers   = 1;
+        imageInfo.samples       = VK_SAMPLE_COUNT_1_BIT;
+        imageInfo.tiling        = VK_IMAGE_TILING_OPTIMAL;
+        imageInfo.usage         =
+            VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+            VK_IMAGE_USAGE_SAMPLED_BIT;
+        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+        VmaAllocationCreateInfo imageAllocInfo{};
+        imageAllocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+
+        // Find free texture slot
+        u32 slotIndex = UINT32_MAX;
+        for (u32 i = 0; i < MAX_TEXTURES; i++)
+        {
+            if (!m_Textures[i].inUse)
+            {
+                slotIndex = i;
+                break;
+            }
+        }
+
+        LX_ASSERT(slotIndex != UINT32_MAX, "Texture pool exhausted");
+
+        Texture& slot = m_Textures[slotIndex];
+
+        vmaCreateImage(
+            m_Allocator,
+            &imageInfo, &imageAllocInfo,
+            &slot.image, &slot.allocation,
+            nullptr);
+
+        // ── Transition and copy ───────────────────────────────────────────────
+        VkCommandBufferAllocateInfo allocInfo{};
+        allocInfo.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        allocInfo.commandPool        = m_CommandPool;
+        allocInfo.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        allocInfo.commandBufferCount = 1;
+
+        VkCommandBuffer cmd;
+        vkAllocateCommandBuffers(m_Device, &allocInfo, &cmd);
+
+        VkCommandBufferBeginInfo beginInfo{};
+        beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        vkBeginCommandBuffer(cmd, &beginInfo);
+
+        // Transition image to transfer destination layout
+        VkImageMemoryBarrier barrier{};
+        barrier.sType                           = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        barrier.oldLayout                       = VK_IMAGE_LAYOUT_UNDEFINED;
+        barrier.newLayout                       = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        barrier.srcQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image                           = slot.image;
+        barrier.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+        barrier.subresourceRange.baseMipLevel   = 0;
+        barrier.subresourceRange.levelCount     = 1;
+        barrier.subresourceRange.baseArrayLayer = 0;
+        barrier.subresourceRange.layerCount     = 1;
+        barrier.srcAccessMask                   = 0;
+        barrier.dstAccessMask                   = VK_ACCESS_TRANSFER_WRITE_BIT;
+
+        vkCmdPipelineBarrier(
+            cmd,
+            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            0, 0, nullptr, 0, nullptr,
+            1, &barrier);
+
+        // Copy staging buffer to image
+        VkBufferImageCopy region{};
+        region.bufferOffset      = 0;
+        region.bufferRowLength   = 0;
+        region.bufferImageHeight = 0;
+        region.imageSubresource.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+        region.imageSubresource.mipLevel       = 0;
+        region.imageSubresource.baseArrayLayer = 0;
+        region.imageSubresource.layerCount     = 1;
+        region.imageOffset = {0, 0, 0};
+        region.imageExtent = {(u32)width, (u32)height, 1};
+
+        vkCmdCopyBufferToImage(
+            cmd,
+            stagingBuffer,
+            slot.image,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            1, &region);
+
+        // Transition image to shader read layout
+        barrier.oldLayout     = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        barrier.newLayout     = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+        vkCmdPipelineBarrier(
+            cmd,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            0, 0, nullptr, 0, nullptr,
+            1, &barrier);
+
+        vkEndCommandBuffer(cmd);
+
+        VkSubmitInfo submitInfo{};
+        submitInfo.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        submitInfo.commandBufferCount = 1;
+        submitInfo.pCommandBuffers    = &cmd;
+
+        vkQueueSubmit(m_GraphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
+        vkQueueWaitIdle(m_GraphicsQueue);
+
+        vkFreeCommandBuffers(m_Device, m_CommandPool, 1, &cmd);
+        vmaDestroyBuffer(m_Allocator, stagingBuffer, stagingAllocation);
+
+        // ── Create image view ─────────────────────────────────────────────────
+        VkImageViewCreateInfo viewInfo{};
+        viewInfo.sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.image    = slot.image;
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.format   = VK_FORMAT_R8G8B8A8_SRGB;
+        viewInfo.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+        viewInfo.subresourceRange.baseMipLevel   = 0;
+        viewInfo.subresourceRange.levelCount     = 1;
+        viewInfo.subresourceRange.baseArrayLayer = 0;
+        viewInfo.subresourceRange.layerCount     = 1;
+
+        vkCreateImageView(m_Device, &viewInfo, nullptr, &slot.view);
+
+        slot.width  = (u32)width;
+        slot.height = (u32)height;
+        slot.inUse  = true;
+
+        ::printf("[Lux] Texture loaded (%ux%u): %s\n", slot.width, slot.height, path);
+
+        TextureHandle handle{};
+        handle.index = slotIndex;
+        return handle;
+    }
+
     void VulkanBackend::DestroyBuffer(BufferHandle handle)
     {
         LX_ASSERT(handle.IsValid(), "Destroying invalid buffer handle");
@@ -1183,18 +1606,78 @@ namespace LX {
         slot = Buffer{}; // reset to default - marks inUse = false
     }
 
-    void VulkanBackend::DrawVertexBuffer(BufferHandle handle, u32 vertexCount)
+    void VulkanBackend::DestroyTexture(TextureHandle handle)
     {
-        LX_ASSERT(handle.IsValid(), "Drawing invalid buffer handle");
+        LX_ASSERT(handle.IsValid(), "Destroying invalid texture handle");
+
+        Texture& slot = m_Textures[handle.index];
+        LX_ASSERT(slot.inUse, "Destroying texture not in use");
+
+        vkDestroyImageView(m_Device, slot.view, nullptr);
+        vmaDestroyImage(m_Allocator, slot.image, slot.allocation);
+        slot = Texture{};
+    }
+
+    void VulkanBackend::DrawIndexed(BufferHandle vertexBuffer, BufferHandle indexBuffer, u32 indexCount, TextureHandle texture)
+    {
+        LX_ASSERT(vertexBuffer.IsValid(), "Drawing invalid vertex buffer");
+        LX_ASSERT(indexBuffer.IsValid(), "Drawing invalid index buffer");
+        LX_ASSERT(texture.IsValid(),      "Invalid texture handle");
 
         VkCommandBuffer cmd = m_CommandBuffers[m_CurrentFrame];
-        Buffer& slot = m_Buffers[handle.index];
+        Buffer& vb = m_Buffers[vertexBuffer.index];
+        Buffer& ib = m_Buffers[indexBuffer.index];
+        Texture& tex = m_Textures[texture.index];
 
-        VkBuffer     buffers[] = { slot.buffer };
+        //Transform buffer
+        VkDescriptorBufferInfo transformInfo{};
+        transformInfo.buffer = m_UniformBuffers[m_CurrentFrame];
+        transformInfo.offset = 0;
+        transformInfo.range = sizeof(GlobalUBO);
+        
+        //Texture
+        VkDescriptorImageInfo imageInfo{};
+        imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        imageInfo.imageView   = tex.view;
+        imageInfo.sampler     = m_Sampler;
+
+        //Light buffer
+        VkDescriptorBufferInfo lightInfo{};
+        lightInfo.buffer = m_LightBuffers[m_CurrentFrame];
+        lightInfo.offset = 0;
+        lightInfo.range = sizeof(LightUBO);
+
+        VkWriteDescriptorSet writes[3] = {};
+
+        writes[0].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[0].dstSet          = m_DescriptorSets[m_CurrentFrame];
+        writes[0].dstBinding      = 0;
+        writes[0].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        writes[0].descriptorCount = 1;
+        writes[0].pBufferInfo     = &transformInfo;
+
+        // Write texture sampler
+        writes[1].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[1].dstSet          = m_DescriptorSets[m_CurrentFrame];
+        writes[1].dstBinding      = 1;
+        writes[1].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[1].descriptorCount = 1;
+        writes[1].pImageInfo      = &imageInfo;
+
+        writes[2].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[2].dstSet          = m_DescriptorSets[m_CurrentFrame];
+        writes[2].dstBinding      = 2;
+        writes[2].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        writes[2].descriptorCount = 1;
+        writes[2].pBufferInfo     = &lightInfo;
+
+        vkUpdateDescriptorSets(m_Device, 3, writes, 0, nullptr);
+
+        // Bind and draw
         VkDeviceSize offsets[] = { 0 };
-
-        vkCmdBindVertexBuffers(cmd, 0, 1, buffers, offsets);
-        vkCmdDraw(cmd, vertexCount, 1, 0, 0);
+        vkCmdBindVertexBuffers(cmd, 0, 1, &vb.buffer, offsets);
+        vkCmdBindIndexBuffer(cmd, ib.buffer, 0, VK_INDEX_TYPE_UINT32);
+        vkCmdDrawIndexed(cmd, indexCount, 1, 0, 0, 0);
     }
 
     void VulkanBackend::BeginFrame()
@@ -1223,8 +1706,9 @@ namespace LX {
         result = vkBeginCommandBuffer(cmd, &beginInfo);
         LX_ASSERT(result == VK_SUCCESS, "Failed to begin command buffer");
 
-        VkClearValue clearColor{};
-        clearColor.color = {{ 0.1f, 0.1f, 0.1f, 1.0f }}; // dark grey
+        VkClearValue clearValues[2];
+        clearValues[0].color = {{ 0.1f, 0.1f, 0.1f, 1.0f }}; // dark grey
+        clearValues[1].depthStencil = {1.0f, 0};
 
         VkRenderPassBeginInfo renderPassInfo{};
         renderPassInfo.sType             = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -1232,8 +1716,8 @@ namespace LX {
         renderPassInfo.framebuffer       = m_Framebuffers[m_CurrentImageIndex];
         renderPassInfo.renderArea.offset = {0, 0};
         renderPassInfo.renderArea.extent = m_SwapchainExtent;
-        renderPassInfo.clearValueCount   = 1;
-        renderPassInfo.pClearValues      = &clearColor;
+        renderPassInfo.clearValueCount   = 2;
+        renderPassInfo.pClearValues      = clearValues;
 
         vkCmdBeginRenderPass(cmd, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 

@@ -13,5 +13,13 @@ namespace LX
         glm::mat4 model;
         glm::mat4 view;
         glm::mat4 projection;
+        glm::vec4 cameraPos;
+    };
+
+    struct LightUBO
+    {
+        glm::vec4 direction;
+        glm::vec4 color; //xyz = color, w = intensity
+        glm::vec4 ambient; //xyz = color, w = unused
     };
 }
