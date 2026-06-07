@@ -31,7 +31,7 @@ if(NOT GLSLC)
     message(FATAL_ERROR "glslc not found. Is the Vulkan SDK installed?")
 endif()
 
-set(SHADER_SOURCE_DIR ${CMAKE_SOURCE_DIR}/Shaders)
+set(SHADER_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/Shaders)
 set(SHADER_OUTPUT_DIR ${CMAKE_BINARY_DIR}/bin/Debug/Shaders)
 
 file(MAKE_DIRECTORY ${SHADER_OUTPUT_DIR})
