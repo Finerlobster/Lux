@@ -1,7 +1,8 @@
 #include "Core/Types.h"
 #include "Core/Assert.h"
 #include "Core/WindowHandle.h"
-#include "Core/Vertex.h"
+#include "Core/Mesh.h"
+#include "Core/MeshLoader.h"
 #include "Vulkan/VulkanBackend.h"
 
 #define WIN32_LEAN_AND_MEAN
@@ -76,70 +77,26 @@ int main()
     bool initialized = backend.Init(windowHandle);
     LX_ASSERT(initialized, "Failed to initialize Vulkan backend");
 
-    LX::Vertex cubeVertices[] =
-    {
-        // position              normal              UV
-        // Front face
-        { -0.5f, -0.5f,  0.5f,  0.0f,  0.0f,  1.0f,  0.0f, 0.0f },
-        {  0.5f, -0.5f,  0.5f,  0.0f,  0.0f,  1.0f,  1.0f, 0.0f },
-        {  0.5f,  0.5f,  0.5f,  0.0f,  0.0f,  1.0f,  1.0f, 1.0f },
-        { -0.5f,  0.5f,  0.5f,  0.0f,  0.0f,  1.0f,  0.0f, 1.0f },
+    LX::Mesh meshes[32] = {};
+    LX::u32 meshCount = 0;
 
-        // Back face
-        {  0.5f, -0.5f, -0.5f,  0.0f,  0.0f, -1.0f,  0.0f, 0.0f },
-        { -0.5f, -0.5f, -0.5f,  0.0f,  0.0f, -1.0f,  1.0f, 0.0f },
-        { -0.5f,  0.5f, -0.5f,  0.0f,  0.0f, -1.0f,  1.0f, 1.0f },
-        {  0.5f,  0.5f, -0.5f,  0.0f,  0.0f, -1.0f,  0.0f, 1.0f },
+    LX::MeshHandle modelHandle = LX::MeshLoader::Load(
+        &backend,
+        "Models/scene.gltf",
+        meshes,
+        32,
+        &meshCount
+    );
 
-        // Left face
-        { -0.5f, -0.5f, -0.5f, -1.0f,  0.0f,  0.0f,  0.0f, 0.0f },
-        { -0.5f, -0.5f,  0.5f, -1.0f,  0.0f,  0.0f,  1.0f, 0.0f },
-        { -0.5f,  0.5f,  0.5f, -1.0f,  0.0f,  0.0f,  1.0f, 1.0f },
-        { -0.5f,  0.5f, -0.5f, -1.0f,  0.0f,  0.0f,  0.0f, 1.0f },
+    ::printf("meshCount = %u, handle valid = %d\n", meshCount, modelHandle.IsValid());
 
-        // Right face
-        {  0.5f, -0.5f,  0.5f,  1.0f,  0.0f,  0.0f,  0.0f, 0.0f },
-        {  0.5f, -0.5f, -0.5f,  1.0f,  0.0f,  0.0f,  1.0f, 0.0f },
-        {  0.5f,  0.5f, -0.5f,  1.0f,  0.0f,  0.0f,  1.0f, 1.0f },
-        {  0.5f,  0.5f,  0.5f,  1.0f,  0.0f,  0.0f,  0.0f, 1.0f },
-
-        // Top face
-        { -0.5f,  0.5f,  0.5f,  0.0f,  1.0f,  0.0f,  0.0f, 0.0f },
-        {  0.5f,  0.5f,  0.5f,  0.0f,  1.0f,  0.0f,  1.0f, 0.0f },
-        {  0.5f,  0.5f, -0.5f,  0.0f,  1.0f,  0.0f,  1.0f, 1.0f },
-        { -0.5f,  0.5f, -0.5f,  0.0f,  1.0f,  0.0f,  0.0f, 1.0f },
-
-        // Bottom face
-        { -0.5f, -0.5f, -0.5f,  0.0f, -1.0f,  0.0f,  0.0f, 0.0f },
-        {  0.5f, -0.5f, -0.5f,  0.0f, -1.0f,  0.0f,  1.0f, 0.0f },
-        {  0.5f, -0.5f,  0.5f,  0.0f, -1.0f,  0.0f,  1.0f, 1.0f },
-        { -0.5f, -0.5f,  0.5f,  0.0f, -1.0f,  0.0f,  0.0f, 1.0f },
-    };
-
-    LX::u32 cubeIndices[] =
-    {
-        0,  1,  2,   2,  3,  0,  // front
-        4,  5,  6,   6,  7,  4,  // back
-        8,  9, 10,  10, 11,  8,  // left
-        12, 13, 14,  14, 15, 12,  // right
-        16, 17, 18,  18, 19, 16,  // top
-        20, 21, 22,  22, 23, 20,  // bottom
-    };
-
-    LX::BufferHandle vertexBuffer = backend.CreateVertexBuffer(
-        cubeVertices, sizeof(cubeVertices));
-
-    LX::BufferHandle indexBuffer = backend.CreateIndexBuffer(
-        cubeIndices, sizeof(cubeIndices));
-
-    LX_ASSERT(vertexBuffer.IsValid(), "Failed to create vertex buffer");
-    LX_ASSERT(indexBuffer.IsValid(),  "Failed to create index buffer");
-
-    LX::TextureHandle texture = backend.CreateTexture("test.jpg");
-    LX_ASSERT(texture.IsValid(), "Failed to load texture");
+    LX_ASSERT(modelHandle.IsValid(), "Failed to load model");
+    ::printf("Loaded %u meshes\n", meshCount);
 
     // Step 7: Message + render loop
     MSG msg{};
+
+    ::printf("Entering render loop, s_Running = %d\n", s_Running);
     while (s_Running)
     {
         // Drain all pending OS messages
@@ -151,7 +108,16 @@ int main()
 
         // Frame work goes here
         backend.BeginFrame();
-        backend.DrawIndexed(vertexBuffer, indexBuffer, 36, texture);
+        
+        for(LX::u32 m = 0; m < meshCount; m++)
+        {
+            LX::Mesh& mesh = meshes[m];
+            for (LX::u32 p = 0; p < mesh.primitiveCount; p++)
+            {
+                backend.DrawPrimitive(mesh.primitives[p]);
+            }
+        }
+
         backend.EndFrame();
     }
 

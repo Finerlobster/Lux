@@ -31,7 +31,10 @@ namespace LX {
         void DestroyTexture(TextureHandle handle) override;
         
         void DrawIndexed(BufferHandle vertexBuffer, BufferHandle indexBuffer, u32 indexCount, TextureHandle texture) override;
+        void DrawPrimitive(const MeshPrimitive& primitive) override;
 
+        void AllocatePrimitiveDescriptors(MeshPrimitive& primitive);
+    
     private:
         bool InitInstance();
         bool SelectPhysicalDevice();
@@ -113,6 +116,8 @@ namespace LX {
         VkDescriptorSetLayout m_DescriptorSetLayout = VK_NULL_HANDLE;
         VkDescriptorPool m_DescriptorPool = VK_NULL_HANDLE;
         VkDescriptorSet m_DescriptorSets[MAX_SWAPCHAIN_IMAGES] = {};
+        // Simple descriptor sets for DrawIndexed — one per frame
+        VkDescriptorSet m_SimpleDescriptorSets[MAX_SWAPCHAIN_IMAGES] = {};
 
         //Depth Buffer
         VkImage        m_DepthImage      = VK_NULL_HANDLE;

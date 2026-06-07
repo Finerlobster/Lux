@@ -1,8 +1,16 @@
 
 add_library(Lux STATIC 
     Core/Assert.h
+    Core/Buffer.h
+    Core/Handle.h
     Core/IRendererBackend.h
+    Core/Mesh.h
+    Core/MeshLoader.h
+    Core/MeshLoader.cpp
+    Core/Texture.h
+    Core/UniformBuffer.h
     Core/Types.h
+    Core/Vertex.h
     Vulkan/VulkanBackend.h
     Vulkan/VulkanBackend.cpp
 )
@@ -17,6 +25,7 @@ target_link_libraries(Lux
         vma
         glm
         stb
+        cgltf
     PRIVATE
 )
 

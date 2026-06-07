@@ -2,6 +2,7 @@
 #include "Types.h"
 #include "WindowHandle.h"
 #include "Handle.h"
+#include "Mesh.h"
 
 namespace LX {
     class IRendererBackend {
@@ -24,6 +25,8 @@ namespace LX {
 
         //Draw API
         virtual void DrawIndexed(BufferHandle vertexBuffer, BufferHandle indexBuffer, u32 indexCount, TextureHandle texture) = 0;
-    
+        virtual void DrawPrimitive(const MeshPrimitive& primitive) = 0;
+
+        virtual void AllocatePrimitiveDescriptors(MeshPrimitive& primitive) = 0;
     };
 }

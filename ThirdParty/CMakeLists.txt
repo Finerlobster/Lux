@@ -28,3 +28,7 @@ target_include_directories(glm INTERFACE glm/)
 # STB
 add_library(stb STATIC stb/stb_impl.cpp)
 target_include_directories(stb PUBLIC stb/)
+
+# CGLTF
+add_library(cgltf STATIC cgltf_impl.cpp)
+target_include_directories(cgltf PUBLIC cgltf/)

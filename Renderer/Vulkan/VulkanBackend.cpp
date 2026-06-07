@@ -2,6 +2,7 @@
 #include "VulkanBackend.h"
 #include "Core/Vertex.h"
 #include "Core/Assert.h"
+#include "Core/Mesh.h"
 
 #include <stb_image.h>
 #include <cstdio>
@@ -1067,28 +1068,33 @@ namespace LX {
         // ── Descriptor Set Layout ─────────────────────────────────────────────
         VkDescriptorSetLayoutBinding bindings[3] = {};
 
-        // Binding 0 — uniform buffer
+        // Binding 0 — transform uniform buffer (vertex + fragment)
         bindings[0].binding            = 0;
         bindings[0].descriptorType     = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         bindings[0].descriptorCount    = 1;
-        bindings[0].stageFlags         = VK_SHADER_STAGE_VERTEX_BIT;
+        bindings[0].stageFlags         = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+        bindings[0].pImmutableSamplers = nullptr;
 
-        // Binding 1 — combined image sampler
+        // Binding 1 — texture sampler (fragment only)
         bindings[1].binding            = 1;
         bindings[1].descriptorType     = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         bindings[1].descriptorCount    = 1;
         bindings[1].stageFlags         = VK_SHADER_STAGE_FRAGMENT_BIT;
+        bindings[1].pImmutableSamplers = nullptr;
 
-        // Binding 2 — light uniform buffer
-        bindings[2].binding         = 2;
-        bindings[2].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        bindings[2].descriptorCount = 1;
-        bindings[2].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+        // Binding 2 — light uniform buffer (fragment only)
+        bindings[2].binding            = 2;
+        bindings[2].descriptorType     = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        bindings[2].descriptorCount    = 1;
+        bindings[2].stageFlags         = VK_SHADER_STAGE_FRAGMENT_BIT;
+        bindings[2].pImmutableSamplers = nullptr;
 
         VkDescriptorSetLayoutCreateInfo layoutInfo{};
         layoutInfo.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        layoutInfo.flags        = 0;
         layoutInfo.bindingCount = 3;
         layoutInfo.pBindings    = bindings;
+        layoutInfo.pNext        = nullptr;
 
         VkResult result = vkCreateDescriptorSetLayout(
             m_Device, &layoutInfo, nullptr, &m_DescriptorSetLayout);
@@ -1097,15 +1103,25 @@ namespace LX {
             return false;
 
         // ── Descriptor Pool ───────────────────────────────────────────────────
+        // Large enough for all primitives across all frames in flight
+        // MAX_MESHES(256) * MAX_PRIMITIVES(16) * MAX_SWAPCHAIN_IMAGES(3) = 12288
+        // We use 1024 as a practical limit — more than enough for any scene
+        u32 maxSets = 1024;
+
         VkDescriptorPoolSize poolSizes[2] = {};
+
+        // Uniform buffers — 2 per set (transform + light)
         poolSizes[0].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        poolSizes[0].descriptorCount = MAX_SWAPCHAIN_IMAGES * 2; //transform + light
+        poolSizes[0].descriptorCount = maxSets * 2;
+
+        // Combined image samplers — 1 per set
         poolSizes[1].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        poolSizes[1].descriptorCount = MAX_SWAPCHAIN_IMAGES;
+        poolSizes[1].descriptorCount = maxSets;
 
         VkDescriptorPoolCreateInfo poolInfo{};
         poolInfo.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        poolInfo.maxSets       = MAX_SWAPCHAIN_IMAGES;
+        poolInfo.flags         = 0;
+        poolInfo.maxSets       = maxSets;
         poolInfo.poolSizeCount = 2;
         poolInfo.pPoolSizes    = poolSizes;
 
@@ -1115,7 +1131,7 @@ namespace LX {
         if (result != VK_SUCCESS)
             return false;
 
-        // ── Allocate descriptor sets ──────────────────────────────────────────
+        // ── Allocate simple descriptor sets for DrawIndexed ───────────────────
         VkDescriptorSetLayout layouts[MAX_SWAPCHAIN_IMAGES];
         for (u32 i = 0; i < m_SwapchainImageCount; i++)
             layouts[i] = m_DescriptorSetLayout;
@@ -1126,9 +1142,8 @@ namespace LX {
         allocInfo.descriptorSetCount = m_SwapchainImageCount;
         allocInfo.pSetLayouts        = layouts;
 
-        result = vkAllocateDescriptorSets(
-            m_Device, &allocInfo, m_DescriptorSets);
-        LX_ASSERT(result == VK_SUCCESS, "Failed to allocate descriptor sets");
+        result = vkAllocateDescriptorSets(m_Device, &allocInfo, m_SimpleDescriptorSets);
+        LX_ASSERT(result == VK_SUCCESS, "Failed to allocate simple descriptor sets");
         if (result != VK_SUCCESS)
             return false;
 
@@ -1229,19 +1244,19 @@ namespace LX {
         //time += 0.016f; //roughly 60fps timestep for now
         time += 0.001f;
 
-        glm::vec3 cameraPos = glm::vec3(0.0f, 1.0f, 3.0f);
+        glm::vec3 cameraPos = glm::vec3(0.0f, 20.0f, 40.0f);
 
         GlobalUBO ubo{};
 
         ubo.model = glm::rotate(
             glm::mat4(1.0f),
-            time,
-            glm::vec3(0.0f, 0.0f, 1.0f)
+            glm::radians(-90.0f),
+            glm::vec3(1.0f, time, 0.0f)
         );
 
         ubo.view = glm::lookAt(
-            glm::vec3(0.0f, 1.0f, 3.0f),
-            glm::vec3(0.0f, 0.0f, 0.0f),
+            cameraPos,
+            glm::vec3(0.0f, 5.0f, 0.0f),
             glm::vec3(0.0f, 1.0f, 0.0f)
         );
 
@@ -1620,52 +1635,53 @@ namespace LX {
 
     void VulkanBackend::DrawIndexed(BufferHandle vertexBuffer, BufferHandle indexBuffer, u32 indexCount, TextureHandle texture)
     {
-        LX_ASSERT(vertexBuffer.IsValid(), "Drawing invalid vertex buffer");
-        LX_ASSERT(indexBuffer.IsValid(), "Drawing invalid index buffer");
+        // Simple single-primitive draw
+        // Creates a temporary MeshPrimitive and calls DrawPrimitive
+        // Used for simple test cases — for real meshes use DrawPrimitive directly
+
+        LX_ASSERT(vertexBuffer.IsValid(), "Invalid vertex buffer");
+        LX_ASSERT(indexBuffer.IsValid(),  "Invalid index buffer");
         LX_ASSERT(texture.IsValid(),      "Invalid texture handle");
 
         VkCommandBuffer cmd = m_CommandBuffers[m_CurrentFrame];
-        Buffer& vb = m_Buffers[vertexBuffer.index];
-        Buffer& ib = m_Buffers[indexBuffer.index];
+        Buffer&  vb  = m_Buffers[vertexBuffer.index];
+        Buffer&  ib  = m_Buffers[indexBuffer.index];
         Texture& tex = m_Textures[texture.index];
 
-        //Transform buffer
+        // Update and bind the shared descriptor set
         VkDescriptorBufferInfo transformInfo{};
         transformInfo.buffer = m_UniformBuffers[m_CurrentFrame];
         transformInfo.offset = 0;
-        transformInfo.range = sizeof(GlobalUBO);
-        
-        //Texture
+        transformInfo.range  = sizeof(GlobalUBO);
+
         VkDescriptorImageInfo imageInfo{};
         imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         imageInfo.imageView   = tex.view;
         imageInfo.sampler     = m_Sampler;
 
-        //Light buffer
         VkDescriptorBufferInfo lightInfo{};
         lightInfo.buffer = m_LightBuffers[m_CurrentFrame];
         lightInfo.offset = 0;
-        lightInfo.range = sizeof(LightUBO);
+        lightInfo.range  = sizeof(LightUBO);
 
         VkWriteDescriptorSet writes[3] = {};
 
         writes[0].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[0].dstSet          = m_DescriptorSets[m_CurrentFrame];
+        writes[0].dstSet          = m_SimpleDescriptorSets[m_CurrentFrame];
         writes[0].dstBinding      = 0;
         writes[0].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         writes[0].descriptorCount = 1;
         writes[0].pBufferInfo     = &transformInfo;
 
-        // Write texture sampler
         writes[1].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[1].dstSet          = m_DescriptorSets[m_CurrentFrame];
+        writes[1].dstSet          = m_SimpleDescriptorSets[m_CurrentFrame];
         writes[1].dstBinding      = 1;
         writes[1].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         writes[1].descriptorCount = 1;
         writes[1].pImageInfo      = &imageInfo;
 
         writes[2].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[2].dstSet          = m_DescriptorSets[m_CurrentFrame];
+        writes[2].dstSet          = m_SimpleDescriptorSets[m_CurrentFrame];
         writes[2].dstBinding      = 2;
         writes[2].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         writes[2].descriptorCount = 1;
@@ -1673,11 +1689,108 @@ namespace LX {
 
         vkUpdateDescriptorSets(m_Device, 3, writes, 0, nullptr);
 
-        // Bind and draw
+        vkCmdBindDescriptorSets(
+            cmd,
+            VK_PIPELINE_BIND_POINT_GRAPHICS,
+            m_PipelineLayout,
+            0, 1,
+            &m_SimpleDescriptorSets[m_CurrentFrame],
+            0, nullptr);
+
         VkDeviceSize offsets[] = { 0 };
         vkCmdBindVertexBuffers(cmd, 0, 1, &vb.buffer, offsets);
         vkCmdBindIndexBuffer(cmd, ib.buffer, 0, VK_INDEX_TYPE_UINT32);
         vkCmdDrawIndexed(cmd, indexCount, 1, 0, 0, 0);
+    }
+
+    void VulkanBackend::DrawPrimitive(const MeshPrimitive& primitive)
+    {
+        LX_ASSERT(primitive.vertexBuffer.IsValid(), "Invalid vertex buffer");
+        LX_ASSERT(primitive.indexBuffer.IsValid(),  "Invalid index buffer");
+
+        VkCommandBuffer cmd = m_CommandBuffers[m_CurrentFrame];
+        Buffer& vb = m_Buffers[primitive.vertexBuffer.index];
+        Buffer& ib = m_Buffers[primitive.indexBuffer.index];
+
+        // Bind this primitive's own descriptor set — already written, no update needed
+        vkCmdBindDescriptorSets(
+            cmd,
+            VK_PIPELINE_BIND_POINT_GRAPHICS,
+            m_PipelineLayout,
+            0, 1,
+            &primitive.descriptorSets[m_CurrentFrame],
+            0, nullptr);
+
+        VkDeviceSize offsets[] = { 0 };
+        vkCmdBindVertexBuffers(cmd, 0, 1, &vb.buffer, offsets);
+        vkCmdBindIndexBuffer(cmd, ib.buffer, 0, VK_INDEX_TYPE_UINT32);
+        vkCmdDrawIndexed(cmd, primitive.indexCount, 1, 0, 0, 0);
+    }
+
+    void VulkanBackend::AllocatePrimitiveDescriptors(MeshPrimitive& primitive)
+    {
+        LX_ASSERT(primitive.texture.IsValid(), "Primitive has no texture");
+
+        Texture& tex = m_Textures[primitive.texture.index];
+
+        // Allocate one descriptor set per frame in flight
+        VkDescriptorSetLayout layouts[MAX_SWAPCHAIN_IMAGES];
+        for (u32 i = 0; i < m_SwapchainImageCount; i++)
+            layouts[i] = m_DescriptorSetLayout;
+
+        VkDescriptorSetAllocateInfo allocInfo{};
+        allocInfo.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        allocInfo.descriptorPool     = m_DescriptorPool;
+        allocInfo.descriptorSetCount = m_SwapchainImageCount;
+        allocInfo.pSetLayouts        = layouts;
+
+        VkResult result = vkAllocateDescriptorSets(
+            m_Device, &allocInfo, primitive.descriptorSets);
+        LX_ASSERT(result == VK_SUCCESS, "Failed to allocate primitive descriptor sets");
+
+        // Write descriptor sets once — they never change for this primitive
+        for (u32 i = 0; i < m_SwapchainImageCount; i++)
+        {
+            VkDescriptorBufferInfo transformInfo{};
+            transformInfo.buffer = m_UniformBuffers[i];
+            transformInfo.offset = 0;
+            transformInfo.range  = sizeof(GlobalUBO);
+
+            VkDescriptorImageInfo imageInfo{};
+            imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            imageInfo.imageView   = tex.view;
+            imageInfo.sampler     = m_Sampler;
+
+            VkDescriptorBufferInfo lightInfo{};
+            lightInfo.buffer = m_LightBuffers[i];
+            lightInfo.offset = 0;
+            lightInfo.range  = sizeof(LightUBO);
+
+            VkWriteDescriptorSet writes[3] = {};
+
+            writes[0].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[0].dstSet          = primitive.descriptorSets[i];
+            writes[0].dstBinding      = 0;
+            writes[0].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            writes[0].descriptorCount = 1;
+            writes[0].pBufferInfo     = &transformInfo;
+
+            writes[1].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[1].dstSet          = primitive.descriptorSets[i];
+            writes[1].dstBinding      = 1;
+            writes[1].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            writes[1].descriptorCount = 1;
+            writes[1].pImageInfo      = &imageInfo;
+
+            writes[2].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[2].dstSet          = primitive.descriptorSets[i];
+            writes[2].dstBinding      = 2;
+            writes[2].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            writes[2].descriptorCount = 1;
+            writes[2].pBufferInfo     = &lightInfo;
+
+            vkUpdateDescriptorSets(m_Device, 3, writes, 0, nullptr);
+        }
     }
 
     void VulkanBackend::BeginFrame()
@@ -1725,15 +1838,6 @@ namespace LX {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipeline);
 
         UpdateUniformBuffer(m_CurrentFrame);
-
-        vkCmdBindDescriptorSets(
-            cmd,
-            VK_PIPELINE_BIND_POINT_GRAPHICS,
-            m_PipelineLayout,
-            0, 1,
-            &m_DescriptorSets[m_CurrentFrame],
-            0, nullptr
-        );
 
     }
 
