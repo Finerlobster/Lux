@@ -1,16 +1,11 @@
 #include "Core/Types.h"
 #include "Core/Assert.h"
 #include "Core/WindowHandle.h"
-#include "Core/Mesh.h"
-#include "Core/MeshLoader.h"
 #include "Vulkan/VulkanBackend.h"
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
-// ── Win32 Window Procedure ────────────────────────────────────────────────────
-// Receives messages from the OS. We handle close and destroy,
-// pass everything else to default handling.
 static bool s_Running = true;
 
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
@@ -20,23 +15,18 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         case WM_CLOSE:
             s_Running = false;
             return 0;
-
         case WM_DESTROY:
             PostQuitMessage(0);
             return 0;
-
         default:
             return DefWindowProcA(hwnd, msg, wParam, lParam);
     }
 }
 
-// ── Entry Point ───────────────────────────────────────────────────────────────
 int main()
 {
-    // Step 1: Get the application instance handle
     HINSTANCE hinstance = GetModuleHandleA(nullptr);
 
-    // Step 2: Register the window class
     WNDCLASSEXA wc{};
     wc.cbSize        = sizeof(WNDCLASSEXA);
     wc.style         = CS_HREDRAW | CS_VREDRAW;
@@ -47,81 +37,40 @@ int main()
 
     LX_ASSERT(RegisterClassExA(&wc), "Failed to register window class");
 
-    // Step 3: Create the window
     HWND hwnd = CreateWindowExA(
-        0,
-        "LuxWindow",        // class name — must match registration
-        "Lux Renderer",     // title bar text
+        0, "LuxWindow", "Lux Renderer",
         WS_OVERLAPPEDWINDOW,
-        CW_USEDEFAULT, CW_USEDEFAULT,  // position — let Windows decide
-        1280, 720,                      // width, height
-        nullptr,            // no parent window
-        nullptr,            // no menu
-        hinstance,
-        nullptr             // no extra data
-    );
+        CW_USEDEFAULT, CW_USEDEFAULT,
+        1280, 720,
+        nullptr, nullptr, hinstance, nullptr);
 
     LX_ASSERT(hwnd != nullptr, "Failed to create Win32 window");
 
-    // Step 4: Show the window
     ShowWindow(hwnd, SW_SHOW);
     UpdateWindow(hwnd);
 
-    // Step 5: Build the window handle for Lux
     LX::WindowHandle windowHandle{};
     windowHandle.hwnd      = hwnd;
     windowHandle.hinstance = hinstance;
 
-    // Step 6: Initialize Lux
     LX::VulkanBackend backend;
     bool initialized = backend.Init(windowHandle);
     LX_ASSERT(initialized, "Failed to initialize Vulkan backend");
 
-    LX::Mesh meshes[32] = {};
-    LX::u32 meshCount = 0;
-
-    LX::MeshHandle modelHandle = LX::MeshLoader::Load(
-        &backend,
-        "Models/scene.gltf",
-        meshes,
-        32,
-        &meshCount
-    );
-
-    ::printf("meshCount = %u, handle valid = %d\n", meshCount, modelHandle.IsValid());
-
-    LX_ASSERT(modelHandle.IsValid(), "Failed to load model");
-    ::printf("Loaded %u meshes\n", meshCount);
-
-    // Step 7: Message + render loop
     MSG msg{};
-
-    ::printf("Entering render loop, s_Running = %d\n", s_Running);
     while (s_Running)
     {
-        // Drain all pending OS messages
         while (PeekMessageA(&msg, nullptr, 0, 0, PM_REMOVE))
         {
             TranslateMessage(&msg);
             DispatchMessageA(&msg);
         }
 
-        // Frame work goes here
         backend.BeginFrame();
-        
-        for(LX::u32 m = 0; m < meshCount; m++)
-        {
-            LX::Mesh& mesh = meshes[m];
-            for (LX::u32 p = 0; p < mesh.primitiveCount; p++)
-            {
-                backend.DrawPrimitive(mesh.primitives[p]);
-            }
-        }
-
+        // draw calls come from engine
         backend.EndFrame();
     }
 
-    // Step 8: Shutdown
     backend.Shutdown();
     return 0;
 }

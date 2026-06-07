@@ -910,8 +910,8 @@ namespace LX {
         rasterizer.sType            = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
         rasterizer.depthClampEnable = VK_FALSE;
         rasterizer.polygonMode      = VK_POLYGON_MODE_FILL;
-        rasterizer.cullMode         = VK_CULL_MODE_NONE;
-        rasterizer.frontFace        = VK_FRONT_FACE_CLOCKWISE;
+        rasterizer.cullMode         = VK_CULL_MODE_BACK_BIT;
+        rasterizer.frontFace        = VK_FRONT_FACE_COUNTER_CLOCKWISE;
         rasterizer.lineWidth        = 1.0f;
 
         VkPipelineMultisampleStateCreateInfo multisampling{};
@@ -1240,50 +1240,13 @@ namespace LX {
 
     void VulkanBackend::UpdateUniformBuffer(u32 frameIndex)
     {
-        static f32 time = 0.0f;
-        //time += 0.016f; //roughly 60fps timestep for now
-        time += 0.001f;
-
-        glm::vec3 cameraPos = glm::vec3(0.0f, 20.0f, 40.0f);
-
         GlobalUBO ubo{};
-
-        ubo.model = glm::rotate(
-            glm::mat4(1.0f),
-            glm::radians(-90.0f),
-            glm::vec3(1.0f, time, 0.0f)
-        );
-
-        ubo.view = glm::lookAt(
-            cameraPos,
-            glm::vec3(0.0f, 5.0f, 0.0f),
-            glm::vec3(0.0f, 1.0f, 0.0f)
-        );
-
-        f32 aspect = (f32)m_SwapchainExtent.width/(f32)m_SwapchainExtent.height;
-
-        ubo.projection = glm::perspective(
-            glm::radians(45.0f),
-            aspect,
-            0.1f,
-            100.0f
-        );
-
-        //Vulkan's Y axis is flipped compared to OpenGL
-        ubo.projection[1][1] *= -1.0f;
-        
-        ubo.cameraPos = glm::vec4(cameraPos, 1.0f);
+        ubo.model = m_Model;
+        ubo.view = m_View;
+        ubo.projection = m_Projection;
+        ubo.cameraPos = glm::vec4(/* extract from view*/);
 
         ::memcpy(m_UniformMapped[frameIndex], &ubo, sizeof(ubo));
-
-        LightUBO light{};
-
-        light.direction = glm::vec4(glm::normalize(glm::vec3(-0.5f, -1.0f, -0.5f)), 0.0f);
-        light.color = glm::vec4(1.0f, 0.95f, 0.8f, 1.0f); //warm white
-        light.ambient = glm::vec4(0.15f, 0.15f, 0.2f, 1.0f); //cool dark ambient
-
-        ::memcpy(m_LightMapped[frameIndex], &light, sizeof(light));
-
     }
 
     VkFormat VulkanBackend::FindDepthFormat()
@@ -1791,6 +1754,17 @@ namespace LX {
 
             vkUpdateDescriptorSets(m_Device, 3, writes, 0, nullptr);
         }
+    }
+
+    void VulkanBackend::SetCamera(const glm::mat4& view, const glm::mat4& projection)
+    {
+        m_View = view;
+        m_Projection = projection;
+    }
+
+    void VulkanBackend::SetModelTransform(const glm::mat4& model)
+    {
+        m_Model = model;
     }
 
     void VulkanBackend::BeginFrame()

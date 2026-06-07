@@ -4,6 +4,11 @@
 #include "Handle.h"
 #include "Mesh.h"
 
+#define GLM_FORCE_RADIANS
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+
 namespace LX {
     class IRendererBackend {
     public:
@@ -28,5 +33,8 @@ namespace LX {
         virtual void DrawPrimitive(const MeshPrimitive& primitive) = 0;
 
         virtual void AllocatePrimitiveDescriptors(MeshPrimitive& primitive) = 0;
+    
+        virtual void SetCamera(const glm::mat4& view, const glm::mat4& projection) = 0;
+        virtual void SetModelTransform(const glm::mat4& model) = 0;
     };
 }

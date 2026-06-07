@@ -34,7 +34,10 @@ namespace LX {
         void DrawPrimitive(const MeshPrimitive& primitive) override;
 
         void AllocatePrimitiveDescriptors(MeshPrimitive& primitive);
-    
+
+        void SetCamera(const glm::mat4& view, const glm::mat4& projection) override;
+        void SetModelTransform(const glm::mat4& model) override;
+
     private:
         bool InitInstance();
         bool SelectPhysicalDevice();
@@ -107,6 +110,10 @@ namespace LX {
         VmaAllocation m_UniformAllocations[MAX_SWAPCHAIN_IMAGES] = {};
         void* m_UniformMapped[MAX_SWAPCHAIN_IMAGES] = {};
 
+        glm::mat4 m_View = glm::mat4(1.0f);
+        glm::mat4 m_Projection = glm::mat4(1.0f);
+        glm::mat4 m_Model = glm::mat4(1.0f);
+
         //Light uniform buffers
         VkBuffer m_LightBuffers[MAX_SWAPCHAIN_IMAGES] = {};
         VmaAllocation m_LightAllocations[MAX_SWAPCHAIN_IMAGES] = {};
@@ -128,6 +135,7 @@ namespace LX {
         //Textures
         Texture m_Textures[MAX_TEXTURES] = {};
         VkSampler m_Sampler = VK_NULL_HANDLE;
+
 
         #if defined(LX_DEBUG)
             VkDebugUtilsMessengerEXT m_DebugMessenger = VK_NULL_HANDLE;
