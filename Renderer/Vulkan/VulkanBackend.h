@@ -18,6 +18,8 @@ namespace LX {
 
     class VulkanBackend : public IRendererBackend {
     public:
+        ~VulkanBackend() override = default;
+    
         bool Init(const WindowHandle& window)         override;
         void Shutdown()     override;
         void BeginFrame()   override;

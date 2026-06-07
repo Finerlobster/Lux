@@ -1244,9 +1244,20 @@ namespace LX {
         ubo.model = m_Model;
         ubo.view = m_View;
         ubo.projection = m_Projection;
-        ubo.cameraPos = glm::vec4(/* extract from view*/);
+
+        glm::mat4 invView = glm::inverse(m_View);
+        ubo.cameraPos = glm::vec4(invView[3]);
 
         ::memcpy(m_UniformMapped[frameIndex], &ubo, sizeof(ubo));
+
+        // Light stays hardcoded for now — engine will drive this later
+        LightUBO light{};
+        light.direction = glm::vec4(
+            glm::normalize(glm::vec3(-0.5f, -1.0f, -0.5f)), 0.0f);
+        light.color   = glm::vec4(1.0f, 0.95f, 0.8f, 1.0f);
+        light.ambient = glm::vec4(0.15f, 0.15f, 0.2f, 1.0f);
+
+        ::memcpy(m_LightMapped[frameIndex], &light, sizeof(light));
     }
 
     VkFormat VulkanBackend::FindDepthFormat()
