@@ -11,6 +11,8 @@ namespace LX {
         f32 x, y, z;
         f32 nx, ny, nz;
         f32 u, v;
+        u32 boneIndices[4] = { 0, 0, 0, 0}; //which bones affect this vertex
+        f32 boneWeights[4] = { 1, 0, 0, 0}; //how much each bone affects it
         
         // Describes how frequently vertex data is fed to the shader.
         // VERTEX means move to the next vertex for each vertex.
@@ -29,7 +31,7 @@ namespace LX {
         // One description per shader input variable.
         static void GetAttributeDescriptions(VkVertexInputAttributeDescription* out, u32* count)
         {
-            *count = 3;
+            *count = 5;
 
             // Attribute 0 — position (vec3)
             out[0].binding  = 0;
@@ -49,6 +51,17 @@ namespace LX {
             out[2].format   = VK_FORMAT_R32G32_SFLOAT;
             out[2].offset   = offsetof(Vertex, u);
 
+            // Attribute 3 - bone indices
+            out[3].binding = 0;
+            out[3].location = 3;
+            out[3].format = VK_FORMAT_R32G32B32A32_UINT;
+            out[3].offset = offsetof(Vertex, boneIndices);
+
+            // Attribute 4 - bone weights
+            out[4].binding = 0;
+            out[4].location = 4;
+            out[4].format = VK_FORMAT_R32G32B32A32_SFLOAT;
+            out[4].offset = offsetof(Vertex, boneWeights);
 
         }
     };

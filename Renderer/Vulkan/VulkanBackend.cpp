@@ -309,6 +309,12 @@ namespace LX {
                     m_LightBuffers[i] = VK_NULL_HANDLE;
                     m_LightAllocations[i] = VK_NULL_HANDLE;
                 }
+                if(m_SkinningBuffers[i] != VK_NULL_HANDLE)
+                {
+                    vmaDestroyBuffer(m_Allocator, m_SkinningBuffers[i], m_SkinningAllocations[i]);
+                    m_SkinningBuffers[i] = VK_NULL_HANDLE;
+                    m_SkinningAllocations[i] = VK_NULL_HANDLE;
+                }
             }
             ::printf("[Lux] Uniform buffers destroyed\n");
 
@@ -870,7 +876,7 @@ namespace LX {
         VkPipelineShaderStageCreateInfo shaderStages[] = { vertStage, fragStage };
 
         VkVertexInputBindingDescription bindingDescription = Vertex::GetBindingDescription();
-        VkVertexInputAttributeDescription attributeDescriptions[3];
+        VkVertexInputAttributeDescription attributeDescriptions[5];
         u32 attributeCount = 0;
         Vertex::GetAttributeDescriptions(attributeDescriptions, &attributeCount);
 
@@ -1057,6 +1063,39 @@ namespace LX {
 
                 m_LightMapped[i] = allocationInfo.pMappedData;
             }
+
+            //Skinning buffer - bone matrices
+            {
+                VkBufferCreateInfo bufferInfo{};
+                bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+                bufferInfo.size = sizeof(SkinningUBO);
+                bufferInfo.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+
+                VmaAllocationCreateInfo allocInfo{};
+                allocInfo.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
+                allocInfo.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
+
+                VmaAllocationInfo allocationInfo{};
+                VkResult result = vmaCreateBuffer(
+                    m_Allocator,
+                    &bufferInfo, &allocInfo,
+                    &m_SkinningBuffers[i], &m_SkinningAllocations[i],
+                    &allocationInfo
+                );
+
+                LX_ASSERT(result == VK_SUCCESS, "Failed to create skinning buffer");
+                if(result != VK_SUCCESS) return false;
+
+                m_SkinningMapped[i] = allocationInfo.pMappedData;
+
+                // Initialize all bones to identity right after creation
+                // so unanimated meshes render correctly
+                SkinningUBO defaultSkinning{};
+                for (u32 b = 0; b < MAX_BONES; b++)
+                    defaultSkinning.boneMatrices[b] = glm::mat4(1.0f);
+
+                ::memcpy(m_SkinningMapped[i], &defaultSkinning, sizeof(SkinningUBO));
+            }
         }
 
         ::printf("[Lux] Uniform buffers created\n");
@@ -1066,7 +1105,7 @@ namespace LX {
     bool VulkanBackend::InitDescriptors()
     {
         // ── Descriptor Set Layout ─────────────────────────────────────────────
-        VkDescriptorSetLayoutBinding bindings[3] = {};
+        VkDescriptorSetLayoutBinding bindings[4] = {};
 
         // Binding 0 — transform uniform buffer (vertex + fragment)
         bindings[0].binding            = 0;
@@ -1089,10 +1128,17 @@ namespace LX {
         bindings[2].stageFlags         = VK_SHADER_STAGE_FRAGMENT_BIT;
         bindings[2].pImmutableSamplers = nullptr;
 
+        // Binding 3 — skinning bone matrices (vertex only)
+        // The vertex shader reads these to deform the mesh
+        bindings[3].binding            = 3;
+        bindings[3].descriptorType     = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        bindings[3].descriptorCount    = 1;
+        bindings[3].stageFlags         = VK_SHADER_STAGE_VERTEX_BIT;
+
         VkDescriptorSetLayoutCreateInfo layoutInfo{};
         layoutInfo.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
         layoutInfo.flags        = 0;
-        layoutInfo.bindingCount = 3;
+        layoutInfo.bindingCount = 4;
         layoutInfo.pBindings    = bindings;
         layoutInfo.pNext        = nullptr;
 
@@ -1112,7 +1158,7 @@ namespace LX {
 
         // Uniform buffers — 2 per set (transform + light)
         poolSizes[0].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        poolSizes[0].descriptorCount = maxSets * 2;
+        poolSizes[0].descriptorCount = maxSets * 3;
 
         // Combined image samplers — 1 per set
         poolSizes[1].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -1638,7 +1684,12 @@ namespace LX {
         lightInfo.offset = 0;
         lightInfo.range  = sizeof(LightUBO);
 
-        VkWriteDescriptorSet writes[3] = {};
+        VkDescriptorBufferInfo skinningInfo{};
+        skinningInfo.buffer = m_SkinningBuffers[m_CurrentFrame];
+        skinningInfo.offset = 0;
+        skinningInfo.range  = sizeof(SkinningUBO);
+
+        VkWriteDescriptorSet writes[4] = {};
 
         writes[0].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[0].dstSet          = m_SimpleDescriptorSets[m_CurrentFrame];
@@ -1661,7 +1712,15 @@ namespace LX {
         writes[2].descriptorCount = 1;
         writes[2].pBufferInfo     = &lightInfo;
 
-        vkUpdateDescriptorSets(m_Device, 3, writes, 0, nullptr);
+        writes[3].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[3].dstSet          = m_SimpleDescriptorSets[m_CurrentFrame];
+        writes[3].dstBinding      = 3;
+        writes[3].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        writes[3].descriptorCount = 1;
+        writes[3].pBufferInfo     = &skinningInfo;
+
+
+        vkUpdateDescriptorSets(m_Device, 4, writes, 0, nullptr);
 
         vkCmdBindDescriptorSets(
             cmd,
@@ -1740,7 +1799,12 @@ namespace LX {
             lightInfo.offset = 0;
             lightInfo.range  = sizeof(LightUBO);
 
-            VkWriteDescriptorSet writes[3] = {};
+            VkDescriptorBufferInfo skinningInfo{};
+            skinningInfo.buffer = m_SkinningBuffers[i];
+            skinningInfo.offset = 0;
+            skinningInfo.range  = sizeof(SkinningUBO);
+
+            VkWriteDescriptorSet writes[4] = {};
 
             writes[0].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             writes[0].dstSet          = primitive.descriptorSets[i];
@@ -1763,7 +1827,15 @@ namespace LX {
             writes[2].descriptorCount = 1;
             writes[2].pBufferInfo     = &lightInfo;
 
-            vkUpdateDescriptorSets(m_Device, 3, writes, 0, nullptr);
+            writes[3].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[3].dstSet          = primitive.descriptorSets[i];
+            writes[3].dstBinding      = 3;
+            writes[3].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            writes[3].descriptorCount = 1;
+            writes[3].pBufferInfo     = &skinningInfo;
+
+
+            vkUpdateDescriptorSets(m_Device, 4, writes, 0, nullptr);
         }
     }
 
@@ -1776,6 +1848,15 @@ namespace LX {
     void VulkanBackend::SetModelTransform(const glm::mat4& model)
     {
         m_Model = model;
+    }
+
+    void VulkanBackend::UploadBoneMatrices(const glm::mat4* matrices, u32 count)
+    {
+        LX_ASSERT(matrices != nullptr, "Bone matrices is null");
+        LX_ASSERT(count <= MAX_BONES, "Too many bones");
+
+        usize copySize = sizeof(glm::mat4) * count;
+        ::memcpy(m_SkinningMapped[m_CurrentFrame], matrices, copySize);
     }
 
     void VulkanBackend::BeginFrame()

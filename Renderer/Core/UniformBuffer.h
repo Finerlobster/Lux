@@ -7,6 +7,8 @@
 
 namespace LX 
 {
+    static constexpr u32 MAX_BONES = 128;
+
     //std140 alignment rules apply - each mat4 is 64 bytes.
     struct GlobalUBO
     {
@@ -21,5 +23,10 @@ namespace LX
         glm::vec4 direction;
         glm::vec4 color; //xyz = color, w = intensity
         glm::vec4 ambient; //xyz = color, w = unused
+    };
+
+    struct SkinningUBO
+    {
+        glm::mat4 boneMatrices[MAX_BONES];
     };
 }

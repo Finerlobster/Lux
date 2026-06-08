@@ -29,6 +29,8 @@ namespace LX {
         BufferHandle CreateIndexBuffer(const void* data, usize size) override;
         void DestroyBuffer(BufferHandle handle) override;
 
+        void UploadBoneMatrices(const glm::mat4* matrices, u32 count) override;
+
         TextureHandle CreateTexture(const char* path) override;
         void DestroyTexture(TextureHandle handle) override;
         
@@ -120,6 +122,11 @@ namespace LX {
         VkBuffer m_LightBuffers[MAX_SWAPCHAIN_IMAGES] = {};
         VmaAllocation m_LightAllocations[MAX_SWAPCHAIN_IMAGES] = {};
         void* m_LightMapped[MAX_SWAPCHAIN_IMAGES] = {};
+
+        //Skinning buffers
+        VkBuffer m_SkinningBuffers[MAX_SWAPCHAIN_IMAGES] = {};
+        VmaAllocation m_SkinningAllocations[MAX_SWAPCHAIN_IMAGES] = {};
+        void* m_SkinningMapped[MAX_SWAPCHAIN_IMAGES] = {};
 
         //Descriptors
         VkDescriptorSetLayout m_DescriptorSetLayout = VK_NULL_HANDLE;

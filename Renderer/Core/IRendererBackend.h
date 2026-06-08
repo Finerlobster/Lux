@@ -24,6 +24,8 @@ namespace LX {
         virtual BufferHandle CreateIndexBuffer(const void* data, usize size) = 0;
         virtual void DestroyBuffer(BufferHandle handle) = 0;
     
+        virtual void UploadBoneMatrices(const glm::mat4* matrices, u32 count) = 0;
+
         //Texture API
         virtual TextureHandle CreateTexture(const char* path) = 0;
         virtual void DestroyTexture(TextureHandle handle) = 0;
