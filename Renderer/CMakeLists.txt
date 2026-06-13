@@ -1,12 +1,14 @@
 
 add_library(Lux STATIC 
     Core/Assert.h
+    Core/AnimationClip.h
     Core/Buffer.h
     Core/Handle.h
     Core/IRendererBackend.h
     Core/Mesh.h
     Core/MeshLoader.h
     Core/MeshLoader.cpp
+    Core/Skeleton.h
     Core/Texture.h
     Core/UniformBuffer.h
     Core/Types.h

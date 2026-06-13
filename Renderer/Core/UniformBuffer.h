@@ -5,9 +5,10 @@
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
 
+#include "Skeleton.h"
+
 namespace LX 
 {
-    static constexpr u32 MAX_BONES = 128;
 
     //std140 alignment rules apply - each mat4 is 64 bytes.
     struct GlobalUBO

@@ -26,12 +26,18 @@ layout(location = 0) out vec4 outColor;
 
 void main()
 {
+    
+    vec4 texColor = texture(texSampler, fragUV);
+    
+    if(texColor.a < 0.1)
+        discard;
+    
     vec3 normal = normalize(fragNormal);
     vec3 lightDir = normalize(-light.direction.xyz);
     vec3 viewDir = normalize(ubo.cameraPos.xyz - fragWorldPos);
     vec3 halfway = normalize(lightDir + viewDir);
 
-    vec4 texColor = texture(texSampler, fragUV);
+    
 
     vec3 ambient = light.ambient.xyz * texColor.rgb;
 

@@ -3,8 +3,13 @@
 #include "Types.h"
 #include "Mesh.h"
 #include "IRendererBackend.h"
+#include "Skeleton.h"
+#include "AnimationClip.h"
 
 namespace LX {
+
+    static constexpr u32 MAX_ANIMATION_CLIPS = 32;
+
     class MeshLoader
     {
         public:
@@ -15,7 +20,10 @@ namespace LX {
             const char* gltfPath,
             Mesh* mesh,
             u32 maxMeshes,
-            u32* outMeshCount
+            u32* outMeshCount,
+            Skeleton* outSkeleton = nullptr,
+            AnimationClip* outClips = nullptr,
+            u32* outClipCount = nullptr
         );
     };
 }
