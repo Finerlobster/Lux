@@ -2095,14 +2095,22 @@ namespace LX {
 
         VkCommandBuffer cmd = m_CommandBuffers[m_CurrentFrame];
 
-        // Upload line vertices to GPU
         ::memcpy(m_LineBufferMapped,
                 m_LineVertices,
                 sizeof(LineVertex) * m_LineVertexCount);
 
-        // Bind line pipeline and descriptor set
         vkCmdBindPipeline(cmd,
             VK_PIPELINE_BIND_POINT_GRAPHICS, m_LinePipeline);
+
+        // Push identity matrix — lines are already in world space
+        glm::mat4 identity = glm::mat4(1.0f);
+        vkCmdPushConstants(
+            cmd,
+            m_LinePipelineLayout,
+            VK_SHADER_STAGE_VERTEX_BIT,
+            0,
+            sizeof(glm::mat4),
+            &identity);
 
         vkCmdBindDescriptorSets(cmd,
             VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -2111,12 +2119,10 @@ namespace LX {
             &m_SimpleDescriptorSets[m_CurrentFrame],
             0, nullptr);
 
-        // Bind line vertex buffer and draw
         VkDeviceSize offset = 0;
         vkCmdBindVertexBuffers(cmd, 0, 1, &m_LineBuffer, &offset);
         vkCmdDraw(cmd, m_LineVertexCount, 1, 0, 0);
 
-        // Reset for next frame
         m_LineVertexCount = 0;
     }
     #endif

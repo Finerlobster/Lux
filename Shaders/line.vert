@@ -1,8 +1,12 @@
 #version 450
 
-layout(set = 0, binding = 0) uniform GlobalUBO
+layout(push_constant) uniform PushConstants
 {
     mat4 model;
+} push;
+
+layout(set = 0, binding = 0) uniform GlobalUBO
+{
     mat4 view;
     mat4 projection;
     vec4 cameraPos;
@@ -15,8 +19,7 @@ layout(location = 0) out vec3 fragColor;
 
 void main()
 {
-    // Lines live in world space directly
-    // model matrix is identity for debug lines
-    gl_Position = ubo.projection * ubo.view * vec4(inPosition, 1.0);
-    fragColor   = inColor;
+    gl_Position = ubo.projection * ubo.view * 
+                  push.model * vec4(inPosition, 1.0);
+    fragColor = inColor;
 }

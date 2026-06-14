@@ -175,6 +175,27 @@ namespace LX
                     }
                 }
 
+                bool hasSkinData = false;
+                for (u32 a = 0; a < (u32)prim.attributes_count; a++)
+                {
+                    if(prim.attributes[a].type == cgltf_attribute_type_joints)
+                    {
+                        hasSkinData = true;
+                        break;
+                    }
+                }
+
+                if(!hasSkinData)
+                {
+                    for(u32 v = 0; v < vertexCount; v++)
+                    {
+                        vertices[v].boneWeights[0] = 0.0f;
+                        vertices[v].boneWeights[1] = 0.0f;
+                        vertices[v].boneWeights[2] = 0.0f;
+                        vertices[v].boneWeights[3] = 0.0f;
+                    }
+                }
+
                 // ── Read indices ──────────────────────────────────────────
                 u32  indexCount = (u32)prim.indices->count;
                 u32* indices    = new u32[indexCount];
