@@ -2,16 +2,7 @@
 #pragma once
 #include "Types.h"
 #include "Handle.h"
-
-// Forward declare Vulkan handle types to avoid pulling in volk
-// VkDescriptorSet is a non-dispatchable handle — pointer sized integer
-#if defined(_WIN32)
-    #define VK_DEFINE_NON_DISPATCHABLE_HANDLE(object) typedef uint64_t object;
-#else
-    #define VK_DEFINE_NON_DISPATCHABLE_HANDLE(object) typedef uint64_t object;
-#endif
-
-VK_DEFINE_NON_DISPATCHABLE_HANDLE(VkDescriptorSet)
+#include <volk.h>
 
 namespace LX {
     struct MeshPrimitive {

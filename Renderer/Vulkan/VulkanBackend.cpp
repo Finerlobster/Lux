@@ -91,6 +91,9 @@ namespace LX {
         if(!InitSyncObjects()) return false;
         if(!InitUniformBuffers()) return false;
         if(!InitPipeline()) return false;
+        #if defined(LX_DEBUG)
+        if(!InitLinePipeline()) return false;
+        #endif
         if(!InitSampler()) return false;
 
         ::printf("Vulkan initialized successfully\n");
@@ -192,7 +195,11 @@ namespace LX {
         if(m_Device != VK_NULL_HANDLE)
         {
             // Wait for the GPU to finish all work before destroying anything
+            ::printf("[Lux] Shutdown: calling vkDeviceWaitIdle\n");
+            ::fflush(stdout);
             vkDeviceWaitIdle(m_Device);
+            ::printf("[Lux] Shutdown: vkDeviceWaitIdle done\n");
+            ::fflush(stdout);
 
             //Destroy Synchronization objects
             for (u32 i = 0; i < m_SwapchainImageCount; i++)
@@ -253,6 +260,28 @@ namespace LX {
                 m_PipelineLayout = VK_NULL_HANDLE;
                 ::printf("[Lux] Pipeline layout destroyed\n");
             }
+
+            #if defined(LX_DEBUG)
+            if (m_LinePipeline != VK_NULL_HANDLE)
+            {
+                vkDestroyPipeline(m_Device, m_LinePipeline, nullptr);
+                m_LinePipeline = VK_NULL_HANDLE;
+            }
+            if (m_LinePipelineLayout != VK_NULL_HANDLE)
+            {
+                vkDestroyPipelineLayout(m_Device, m_LinePipelineLayout, nullptr);
+                m_LinePipelineLayout = VK_NULL_HANDLE;
+            }
+            if (m_LineBuffer != VK_NULL_HANDLE)
+            {
+                vmaDestroyBuffer(m_Allocator, m_LineBuffer, m_LineBufferAllocation);
+                m_LineBuffer           = VK_NULL_HANDLE;
+                m_LineBufferAllocation = VK_NULL_HANDLE;
+                ::printf("[Lux] Line pipeline destroyed\n");
+            }
+            delete[] m_LineVertices;
+            m_LineVertices = nullptr;
+            #endif
 
             //Destroy RenderPass
             if(m_RenderPass != VK_NULL_HANDLE)
@@ -948,11 +977,17 @@ namespace LX {
         colorBlending.attachmentCount = 1;
         colorBlending.pAttachments    = &colorBlendAttachment;
 
+        VkPushConstantRange pushConstantRange{};
+        pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+        pushConstantRange.offset = 0;
+        pushConstantRange.size = sizeof(glm::mat4);
+
         VkPipelineLayoutCreateInfo layoutInfo{};
         layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
         layoutInfo.setLayoutCount         = 1;
         layoutInfo.pSetLayouts            = &m_DescriptorSetLayout;
-        layoutInfo.pushConstantRangeCount = 0;
+        layoutInfo.pushConstantRangeCount = 1;
+        layoutInfo.pPushConstantRanges = &pushConstantRange;
 
         VkResult result = vkCreatePipelineLayout(m_Device, &layoutInfo, nullptr, &m_PipelineLayout);
         LX_ASSERT(result == VK_SUCCESS, "Failed to create pipeline layout");
@@ -986,6 +1021,172 @@ namespace LX {
         ::printf("[Lux] Pipeline created\n");
         return true;
     }
+
+    #if defined(LX_DEBUG)
+    bool VulkanBackend::InitLinePipeline()
+    {
+        // ── Load line shaders ─────────────────────────────────────────────
+        m_LineVertices = new LineVertex[MAX_DEBUG_VERTICES];
+        VkShaderModule vertModule = VK_NULL_HANDLE;
+        VkShaderModule fragModule = VK_NULL_HANDLE;
+
+        if (!LoadShaderModule(m_Device, "Shaders/line.vert.spv", &vertModule))
+            return false;
+        if (!LoadShaderModule(m_Device, "Shaders/line.frag.spv", &fragModule))
+            return false;
+
+        VkPipelineShaderStageCreateInfo vertStage{};
+        vertStage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        vertStage.stage  = VK_SHADER_STAGE_VERTEX_BIT;
+        vertStage.module = vertModule;
+        vertStage.pName  = "main";
+
+        VkPipelineShaderStageCreateInfo fragStage{};
+        fragStage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        fragStage.stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+        fragStage.module = fragModule;
+        fragStage.pName  = "main";
+
+        VkPipelineShaderStageCreateInfo shaderStages[] = { vertStage, fragStage };
+
+        // ── Vertex input ──────────────────────────────────────────────────
+        VkVertexInputBindingDescription bindingDesc =
+            LineVertex::GetBindingDescription();
+
+        VkVertexInputAttributeDescription attrDesc[2];
+        u32 attrCount = 0;
+        LineVertex::GetAttributeDescriptions(attrDesc, &attrCount);
+
+        VkPipelineVertexInputStateCreateInfo vertexInput{};
+        vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+        vertexInput.vertexBindingDescriptionCount   = 1;
+        vertexInput.pVertexBindingDescriptions      = &bindingDesc;
+        vertexInput.vertexAttributeDescriptionCount = attrCount;
+        vertexInput.pVertexAttributeDescriptions    = attrDesc;
+
+        // ── Input assembly — LINE_LIST ────────────────────────────────────
+        // Each pair of vertices forms one line segment
+        VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
+        inputAssembly.sType    = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+        inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
+        inputAssembly.primitiveRestartEnable = VK_FALSE;
+
+        // ── Viewport ──────────────────────────────────────────────────────
+        VkViewport viewport{};
+        viewport.x        = 0.0f;
+        viewport.y        = 0.0f;
+        viewport.width    = (f32)m_SwapchainExtent.width;
+        viewport.height   = (f32)m_SwapchainExtent.height;
+        viewport.minDepth = 0.0f;
+        viewport.maxDepth = 1.0f;
+
+        VkRect2D scissor{};
+        scissor.offset = {0, 0};
+        scissor.extent = m_SwapchainExtent;
+
+        VkPipelineViewportStateCreateInfo viewportState{};
+        viewportState.sType         = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+        viewportState.viewportCount = 1;
+        viewportState.pViewports    = &viewport;
+        viewportState.scissorCount  = 1;
+        viewportState.pScissors     = &scissor;
+
+        // ── Rasterizer ────────────────────────────────────────────────────
+        VkPipelineRasterizationStateCreateInfo rasterizer{};
+        rasterizer.sType       = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+        rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+        rasterizer.cullMode    = VK_CULL_MODE_NONE;
+        rasterizer.frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+        rasterizer.lineWidth   = 1.0f;
+
+        // ── Multisampling ─────────────────────────────────────────────────
+        VkPipelineMultisampleStateCreateInfo multisampling{};
+        multisampling.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+        multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+        // ── Depth test — lines respect depth ─────────────────────────────
+        VkPipelineDepthStencilStateCreateInfo depthStencil{};
+        depthStencil.sType            = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+        depthStencil.depthTestEnable  = VK_TRUE;
+        depthStencil.depthWriteEnable = VK_FALSE; // lines don't write depth
+        depthStencil.depthCompareOp   = VK_COMPARE_OP_LESS_OR_EQUAL;
+
+        // ── Color blend ───────────────────────────────────────────────────
+        VkPipelineColorBlendAttachmentState colorBlendAttachment{};
+        colorBlendAttachment.colorWriteMask =
+            VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+            VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+        colorBlendAttachment.blendEnable = VK_FALSE;
+
+        VkPipelineColorBlendStateCreateInfo colorBlending{};
+        colorBlending.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+        colorBlending.attachmentCount = 1;
+        colorBlending.pAttachments    = &colorBlendAttachment;
+
+        // ── Pipeline layout — reuse main layout ───────────────────────────
+        // Lines use the same descriptor set as meshes (same view/proj matrices)
+        VkPushConstantRange pushConstantRange{};
+        pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+        pushConstantRange.offset = 0;
+        pushConstantRange.size = sizeof(glm::mat4);
+        
+        VkPipelineLayoutCreateInfo layoutInfo{};
+        layoutInfo.sType          = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        layoutInfo.setLayoutCount = 1;
+        layoutInfo.pSetLayouts    = &m_DescriptorSetLayout;
+        layoutInfo.pushConstantRangeCount = 1;
+        layoutInfo.pPushConstantRanges = &pushConstantRange;
+
+        VkResult result = vkCreatePipelineLayout(
+            m_Device, &layoutInfo, nullptr, &m_LinePipelineLayout);
+        LX_ASSERT(result == VK_SUCCESS, "Failed to create line pipeline layout");
+
+        // ── Create pipeline ───────────────────────────────────────────────
+        VkGraphicsPipelineCreateInfo pipelineInfo{};
+        pipelineInfo.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+        pipelineInfo.stageCount          = 2;
+        pipelineInfo.pStages             = shaderStages;
+        pipelineInfo.pVertexInputState   = &vertexInput;
+        pipelineInfo.pInputAssemblyState = &inputAssembly;
+        pipelineInfo.pViewportState      = &viewportState;
+        pipelineInfo.pRasterizationState = &rasterizer;
+        pipelineInfo.pMultisampleState   = &multisampling;
+        pipelineInfo.pDepthStencilState  = &depthStencil;
+        pipelineInfo.pColorBlendState    = &colorBlending;
+        pipelineInfo.layout              = m_LinePipelineLayout;
+        pipelineInfo.renderPass          = m_RenderPass;
+        pipelineInfo.subpass             = 0;
+
+        result = vkCreateGraphicsPipelines(
+            m_Device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &m_LinePipeline);
+        LX_ASSERT(result == VK_SUCCESS, "Failed to create line pipeline");
+
+        vkDestroyShaderModule(m_Device, vertModule, nullptr);
+        vkDestroyShaderModule(m_Device, fragModule, nullptr);
+
+        // ── Create GPU line buffer ────────────────────────────────────────
+        VkBufferCreateInfo bufferInfo{};
+        bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bufferInfo.size  = sizeof(LineVertex) * MAX_DEBUG_VERTICES;
+        bufferInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+
+        VmaAllocationCreateInfo allocInfo{};
+        allocInfo.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
+        allocInfo.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
+
+        VmaAllocationInfo allocationInfo{};
+        vmaCreateBuffer(
+            m_Allocator,
+            &bufferInfo, &allocInfo,
+            &m_LineBuffer, &m_LineBufferAllocation,
+            &allocationInfo);
+
+        m_LineBufferMapped = allocationInfo.pMappedData;
+
+        ::printf("[Lux] Line pipeline created\n");
+        return true;  
+    }
+    #endif
 
     bool VulkanBackend::InitAllocator()
     {
@@ -1287,7 +1488,6 @@ namespace LX {
     void VulkanBackend::UpdateUniformBuffer(u32 frameIndex)
     {
         GlobalUBO ubo{};
-        ubo.model = m_Model;
         ubo.view = m_View;
         ubo.projection = m_Projection;
 
@@ -1742,12 +1942,17 @@ namespace LX {
         LX_ASSERT(primitive.indexBuffer.IsValid(),  "Invalid index buffer");
 
         VkCommandBuffer cmd = m_CommandBuffers[m_CurrentFrame];
-        Buffer& vb = m_Buffers[primitive.vertexBuffer.index];
-        Buffer& ib = m_Buffers[primitive.indexBuffer.index];
 
-        // Bind this primitive's own descriptor set — already written, no update needed
-        vkCmdBindDescriptorSets(
+        // Push model matrix — unique per draw call
+        vkCmdPushConstants(
             cmd,
+            m_PipelineLayout,
+            VK_SHADER_STAGE_VERTEX_BIT,
+            0,
+            sizeof(glm::mat4),
+            &m_Model);
+
+        vkCmdBindDescriptorSets(cmd,
             VK_PIPELINE_BIND_POINT_GRAPHICS,
             m_PipelineLayout,
             0, 1,
@@ -1755,8 +1960,11 @@ namespace LX {
             0, nullptr);
 
         VkDeviceSize offsets[] = { 0 };
-        vkCmdBindVertexBuffers(cmd, 0, 1, &vb.buffer, offsets);
-        vkCmdBindIndexBuffer(cmd, ib.buffer, 0, VK_INDEX_TYPE_UINT32);
+        vkCmdBindVertexBuffers(cmd, 0, 1,
+            &m_Buffers[primitive.vertexBuffer.index].buffer, offsets);
+        vkCmdBindIndexBuffer(cmd,
+            m_Buffers[primitive.indexBuffer.index].buffer,
+            0, VK_INDEX_TYPE_UINT32);
         vkCmdDrawIndexed(cmd, primitive.indexCount, 1, 0, 0, 0);
     }
 
@@ -1848,6 +2056,12 @@ namespace LX {
     void VulkanBackend::SetModelTransform(const glm::mat4& model)
     {
         m_Model = model;
+
+        ::printf("[Lux] SetModelTransform pos: %.2f %.2f %.2f\n",
+        model[3][0], model[3][1], model[3][2]);
+    m_Model = model;
+
+        UpdateUniformBuffer(m_CurrentFrame);
     }
 
     void VulkanBackend::UploadBoneMatrices(const glm::mat4* matrices, u32 count)
@@ -1856,8 +2070,56 @@ namespace LX {
         LX_ASSERT(count <= MAX_BONES, "Too many bones");
 
         usize copySize = sizeof(glm::mat4) * count;
-        ::memcpy(m_SkinningMapped[m_CurrentFrame], matrices, copySize);
+
+        for (u32 i = 0; i < m_SwapchainImageCount; i++)
+            ::memcpy(m_SkinningMapped[m_CurrentFrame], matrices, copySize);
     }
+
+    #if defined(LX_DEBUG)
+    void VulkanBackend::DrawDebugLine(
+        f32 x0, f32 y0, f32 z0,
+        f32 x1, f32 y1, f32 z1,
+        f32 r,  f32 g,  f32 b)
+    {
+        if (m_LineVertexCount + 2 > MAX_DEBUG_VERTICES)
+            return; // buffer full
+
+        m_LineVertices[m_LineVertexCount++] = { x0, y0, z0, r, g, b };
+        m_LineVertices[m_LineVertexCount++] = { x1, y1, z1, r, g, b };
+    }
+
+    void VulkanBackend::FlushDebugLines()
+    {
+        if (m_LineVertexCount == 0)
+            return;
+
+        VkCommandBuffer cmd = m_CommandBuffers[m_CurrentFrame];
+
+        // Upload line vertices to GPU
+        ::memcpy(m_LineBufferMapped,
+                m_LineVertices,
+                sizeof(LineVertex) * m_LineVertexCount);
+
+        // Bind line pipeline and descriptor set
+        vkCmdBindPipeline(cmd,
+            VK_PIPELINE_BIND_POINT_GRAPHICS, m_LinePipeline);
+
+        vkCmdBindDescriptorSets(cmd,
+            VK_PIPELINE_BIND_POINT_GRAPHICS,
+            m_LinePipelineLayout,
+            0, 1,
+            &m_SimpleDescriptorSets[m_CurrentFrame],
+            0, nullptr);
+
+        // Bind line vertex buffer and draw
+        VkDeviceSize offset = 0;
+        vkCmdBindVertexBuffers(cmd, 0, 1, &m_LineBuffer, &offset);
+        vkCmdDraw(cmd, m_LineVertexCount, 1, 0, 0);
+
+        // Reset for next frame
+        m_LineVertexCount = 0;
+    }
+    #endif
 
     void VulkanBackend::BeginFrame()
     {
@@ -1903,13 +2165,56 @@ namespace LX {
         //Bind the pipeline
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipeline);
 
-        UpdateUniformBuffer(m_CurrentFrame);
+        // Update simple descriptor sets with current frame's buffers
+        // This ensures they're valid even if DrawIndexed is never called
+        VkDescriptorBufferInfo transformInfo{};
+        transformInfo.buffer = m_UniformBuffers[m_CurrentFrame];
+        transformInfo.offset = 0;
+        transformInfo.range  = sizeof(GlobalUBO);
 
+        VkDescriptorBufferInfo lightInfo{};
+        lightInfo.buffer = m_LightBuffers[m_CurrentFrame];
+        lightInfo.offset = 0;
+        lightInfo.range  = sizeof(LightUBO);
+
+        VkDescriptorBufferInfo skinningInfo{};
+        skinningInfo.buffer = m_SkinningBuffers[m_CurrentFrame];
+        skinningInfo.offset = 0;
+        skinningInfo.range  = sizeof(SkinningUBO);
+
+        VkWriteDescriptorSet writes[3] = {};
+
+        writes[0].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[0].dstSet          = m_SimpleDescriptorSets[m_CurrentFrame];
+        writes[0].dstBinding      = 0;
+        writes[0].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        writes[0].descriptorCount = 1;
+        writes[0].pBufferInfo     = &transformInfo;
+
+        writes[1].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[1].dstSet          = m_SimpleDescriptorSets[m_CurrentFrame];
+        writes[1].dstBinding      = 2;
+        writes[1].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        writes[1].descriptorCount = 1;
+        writes[1].pBufferInfo     = &lightInfo;
+
+        writes[2].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[2].dstSet          = m_SimpleDescriptorSets[m_CurrentFrame];
+        writes[2].dstBinding      = 3;
+        writes[2].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        writes[2].descriptorCount = 1;
+        writes[2].pBufferInfo     = &skinningInfo;
+
+        vkUpdateDescriptorSets(m_Device, 3, writes, 0, nullptr);
     }
 
     void VulkanBackend::EndFrame()
     {
         VkCommandBuffer cmd = m_CommandBuffers[m_CurrentFrame];
+
+        #if defined(LX_DEBUG)
+            FlushDebugLines();
+        #endif
 
         vkCmdEndRenderPass(cmd);
 

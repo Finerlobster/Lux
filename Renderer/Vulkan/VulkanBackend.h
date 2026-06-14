@@ -4,6 +4,7 @@
 #include "Core/Buffer.h"
 #include "Core/UniformBuffer.h"
 #include "Core/Texture.h"
+#include "Core/LineVertex.h"
 #include <volk.h>
 #include <vk_mem_alloc.h>
 
@@ -42,6 +43,14 @@ namespace LX {
         void SetCamera(const glm::mat4& view, const glm::mat4& projection) override;
         void SetModelTransform(const glm::mat4& model) override;
 
+        #if defined(LX_DEBUG)
+        void DrawDebugLine(
+            f32 x0, f32 y0, f32 z0,
+            f32 x1, f32 y1, f32 z1,
+            f32 r,  f32 g,  f32 b) override;
+        void FlushDebugLines() override;
+        #endif
+
     private:
         bool InitInstance();
         bool SelectPhysicalDevice();
@@ -60,6 +69,9 @@ namespace LX {
         bool InitSampler();
         void UpdateUniformBuffer(u32 frameIndex);
         
+        #if defined(LX_DEBUG)
+        bool InitLinePipeline();
+        #endif
 
         //Internal helper - does the actual staging and copy work
         BufferHandle CreateBuffer(const void* data, usize size, VkBufferUsageFlags usage);
@@ -148,6 +160,23 @@ namespace LX {
 
         #if defined(LX_DEBUG)
             VkDebugUtilsMessengerEXT m_DebugMessenger = VK_NULL_HANDLE;
+
+            // ── Debug line rendering ──────────────────────────────────────────────
+            static constexpr u32 MAX_DEBUG_LINES    = 65536;
+            static constexpr u32 MAX_DEBUG_VERTICES = MAX_DEBUG_LINES * 2;
+
+            VkPipeline       m_LinePipeline       = VK_NULL_HANDLE;
+            VkPipelineLayout m_LinePipelineLayout = VK_NULL_HANDLE;
+
+            // CPU side line buffer — filled each frame
+            LineVertex*      m_LineVertices = nullptr;
+            u32              m_LineVertexCount                  = 0;
+
+            // GPU side line buffer
+            VkBuffer         m_LineBuffer          = VK_NULL_HANDLE;
+            VmaAllocation    m_LineBufferAllocation = VK_NULL_HANDLE;
+            void*            m_LineBufferMapped     = nullptr;
+
         #endif
     };
 }

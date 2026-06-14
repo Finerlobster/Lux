@@ -39,6 +39,8 @@ file(MAKE_DIRECTORY ${SHADER_OUTPUT_DIR})
 set(SHADERS 
     ${SHADER_SOURCE_DIR}/triangle.vert 
     ${SHADER_SOURCE_DIR}/triangle.frag
+    ${SHADER_SOURCE_DIR}/line.vert 
+    ${SHADER_SOURCE_DIR}/line.frag 
 )
 
 foreach(SHADER ${SHADERS})

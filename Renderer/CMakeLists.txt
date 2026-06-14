@@ -31,6 +31,12 @@ target_link_libraries(Lux
     PRIVATE
 )
 
+target_precompile_headers(Lux PRIVATE
+    <volk.h>
+    <vk_mem_alloc.h>
+    <glm/glm.hpp>
+)
+
 target_compile_definitions(Lux PRIVATE LX_DEBUG)
 
 if(MSVC)

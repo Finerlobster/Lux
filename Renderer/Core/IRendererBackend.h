@@ -38,5 +38,13 @@ namespace LX {
     
         virtual void SetCamera(const glm::mat4& view, const glm::mat4& projection) = 0;
         virtual void SetModelTransform(const glm::mat4& model) = 0;
+
+        #if defined(LX_DEBUG)
+        virtual void DrawDebugLine(
+            f32 x0, f32 y0, f32 z0, 
+            f32 x1, f32 y1, f32 z1, 
+            f32 r, f32 g, f32 b) = 0;
+        virtual void FlushDebugLines() = 0;
+        #endif
     };
 }

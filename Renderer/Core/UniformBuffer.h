@@ -13,7 +13,6 @@ namespace LX
     //std140 alignment rules apply - each mat4 is 64 bytes.
     struct GlobalUBO
     {
-        glm::mat4 model;
         glm::mat4 view;
         glm::mat4 projection;
         glm::vec4 cameraPos;
