@@ -8,6 +8,12 @@
 #include <cstdio>
 #include <cstring>
 
+#if defined(LX_DEBUG)
+#include <imgui.h>
+#include <imgui_impl_vulkan.h>
+#include <imgui_impl_sdl3.h>
+#endif
+
 namespace LX {
     #if defined(LX_DEBUG)
         static VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(
@@ -404,6 +410,10 @@ namespace LX {
                 m_Sampler = VK_NULL_HANDLE;
                 ::printf("[Lux] Sampler destroyed\n");
             }
+
+            #if defined(LX_DEBUG)
+            ShutdownImGui();
+            #endif
 
             // Destroy Device
             vkDestroyDevice(m_Device, nullptr);
@@ -2056,11 +2066,6 @@ namespace LX {
     void VulkanBackend::SetModelTransform(const glm::mat4& model)
     {
         m_Model = model;
-
-        ::printf("[Lux] SetModelTransform pos: %.2f %.2f %.2f\n",
-        model[3][0], model[3][1], model[3][2]);
-    m_Model = model;
-
         UpdateUniformBuffer(m_CurrentFrame);
     }
 
@@ -2125,6 +2130,101 @@ namespace LX {
 
         m_LineVertexCount = 0;
     }
+    
+    bool VulkanBackend::InitImGui(void* sdlWindow)
+    {
+        (void)sdlWindow;
+
+        ::printf("[Lux] ImGui: creating descriptor pool\n"); ::fflush(stdout);
+
+        VkDescriptorPoolSize poolSizes[] =
+        {
+            { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1000 },
+        };
+
+        VkDescriptorPoolCreateInfo poolInfo{};
+        poolInfo.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        poolInfo.flags         = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+        poolInfo.maxSets       = 1000;
+        poolInfo.poolSizeCount = 1;
+        poolInfo.pPoolSizes    = poolSizes;
+
+        VkResult result = vkCreateDescriptorPool(
+            m_Device, &poolInfo, nullptr, &m_ImGuiDescriptorPool);
+        LX_ASSERT(result == VK_SUCCESS, "Failed to create ImGui descriptor pool");
+
+        ::printf("[Lux] ImGui: creating context\n"); ::fflush(stdout);
+        IMGUI_CHECKVERSION();
+        ImGui::CreateContext();
+        ImGuiIO& io = ImGui::GetIO();
+        io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+        io.DisplaySize = ImVec2(
+            (float)m_SwapchainExtent.width,
+            (float)m_SwapchainExtent.height);
+        ImGui::StyleColorsDark();
+
+        ::printf("[Lux] ImGui: init Vulkan backend\n"); ::fflush(stdout);
+        ImGui_ImplVulkan_InitInfo initInfo{};
+        initInfo.Instance       = m_Instance;
+        initInfo.PhysicalDevice = m_PhysicalDevice;
+        initInfo.Device         = m_Device;
+        initInfo.Queue          = m_GraphicsQueue;
+        initInfo.QueueFamily    = m_GraphicsQueueFamily;
+        initInfo.DescriptorPool = m_ImGuiDescriptorPool;
+        initInfo.MinImageCount  = m_SwapchainImageCount;
+        initInfo.ImageCount     = m_SwapchainImageCount;
+        initInfo.RenderPass  = m_RenderPass;
+        initInfo.Subpass     = 0;
+        initInfo.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+        initInfo.CheckVkResultFn = [](VkResult r) {
+            if (r != VK_SUCCESS) {
+                ::printf("[ImGui] Vulkan error: %d\n", r);
+                ::fflush(stdout);
+            }
+        };
+
+        ImGui_ImplVulkan_LoadFunctions(
+            [](const char* functionName, void*) -> PFN_vkVoidFunction
+            {
+                return vkGetInstanceProcAddr(volkGetLoadedInstance(), functionName);
+            });
+
+        ImGui_ImplVulkan_Init(&initInfo);
+
+        ::printf("[Lux] ImGui initialized\n"); ::fflush(stdout);
+        return true;
+    }
+
+    void VulkanBackend::ImGuiBeginFrame()
+    {
+        ImGui_ImplVulkan_NewFrame();
+        ImGui::NewFrame();
+    }
+
+    void VulkanBackend::ImGuiEndFrame()
+    {
+        ImGui::Render();
+        ImGui_ImplVulkan_RenderDrawData(
+            ImGui::GetDrawData(),
+            m_CommandBuffers[m_CurrentFrame]);
+    }
+
+    void VulkanBackend::ShutdownImGui()
+    {
+        // Shutdown ImGui backends FIRST before destroying pool
+        ImGui_ImplVulkan_Shutdown();
+        ImGui::DestroyContext();
+
+        // Then destroy the pool
+        if (m_ImGuiDescriptorPool != VK_NULL_HANDLE)
+        {
+            vkDestroyDescriptorPool(m_Device, m_ImGuiDescriptorPool, nullptr);
+            m_ImGuiDescriptorPool = VK_NULL_HANDLE;
+        }
+
+        ::printf("[Lux] ImGui shutdown\n");
+    }
+      
     #endif
 
     void VulkanBackend::BeginFrame()

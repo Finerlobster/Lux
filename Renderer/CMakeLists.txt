@@ -28,6 +28,7 @@ target_link_libraries(Lux
         glm
         stb
         cgltf
+        imgui
     PRIVATE
 )
 

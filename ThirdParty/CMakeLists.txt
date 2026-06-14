@@ -32,3 +32,25 @@ target_include_directories(stb PUBLIC stb/)
 # CGLTF
 add_library(cgltf STATIC cgltf_impl.cpp)
 target_include_directories(cgltf PUBLIC cgltf/)
+
+# ImGui
+add_library(imgui STATIC
+    imgui/imgui.cpp
+    imgui/imgui_draw.cpp
+    imgui/imgui_tables.cpp
+    imgui/imgui_widgets.cpp
+    imgui/backends/imgui_impl_vulkan.cpp
+)
+
+target_include_directories(imgui PUBLIC
+    imgui/
+    imgui/backends/
+    ${CMAKE_SOURCE_DIR}/ThirdParty/SDL3/include
+)
+
+target_link_libraries(imgui PUBLIC volk)
+
+target_compile_definitions(imgui PUBLIC
+    IMGUI_IMPL_VULKAN_NO_PROTOTYPES
+    VK_NO_PROTOTYPES
+)

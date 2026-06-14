@@ -45,6 +45,11 @@ namespace LX {
             f32 x1, f32 y1, f32 z1, 
             f32 r, f32 g, f32 b) = 0;
         virtual void FlushDebugLines() = 0;
+
+        //ImGui
+        virtual void ImGuiBeginFrame() = 0;
+        virtual void ImGuiEndFrame() = 0;
+
         #endif
     };
 }

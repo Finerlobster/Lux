@@ -49,6 +49,16 @@ namespace LX {
             f32 x1, f32 y1, f32 z1,
             f32 r,  f32 g,  f32 b) override;
         void FlushDebugLines() override;
+
+        // ImGui
+
+        bool InitImGui(void* sdlWindow);
+        void ImGuiBeginFrame();
+        void ImGuiEndFrame();
+        void ShutdownImGui();
+
+        VkDescriptorPool m_ImGuiDescriptorPool = VK_NULL_HANDLE;
+
         #endif
 
     private:
