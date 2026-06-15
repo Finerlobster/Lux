@@ -2190,6 +2190,7 @@ namespace LX {
             });
 
         ImGui_ImplVulkan_Init(&initInfo);
+        
 
         ::printf("[Lux] ImGui initialized\n"); ::fflush(stdout);
         return true;
@@ -2197,6 +2198,10 @@ namespace LX {
 
     void VulkanBackend::ImGuiBeginFrame()
     {
+        ImGuiIO& io = ImGui::GetIO();
+        io.DisplaySize = ImVec2((f32)m_SwapchainExtent.width, (f32)m_SwapchainExtent.height);
+        io.DeltaTime = 1.0f / 60.0f;
+
         ImGui_ImplVulkan_NewFrame();
         ImGui::NewFrame();
     }
