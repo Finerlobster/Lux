@@ -29,10 +29,10 @@ namespace LX
         ChannelType type = ChannelType::Rotation;
 
         // Keyframe times in seconds
-        f32 times[MAX_KEYFRAMES] = {};
+        f32 times[MAX_KEYFRAMES];
 
         // Keyframe values
-        glm::vec4 values[MAX_KEYFRAMES] = {};
+        glm::vec4 values[MAX_KEYFRAMES];
 
         u32 keyframeCount = 0;
     };
@@ -41,7 +41,7 @@ namespace LX
     {
         char name[MAX_CLIP_NAME] = {};
         f32 duration = 0.0f; // in seconds
-        AnimationChannel channels[MAX_CHANNELS] = {};
+        AnimationChannel channels[MAX_CHANNELS];
         u32 channelCount = 0;
     };
 }
